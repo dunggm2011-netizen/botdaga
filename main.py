@@ -1,5 +1,6 @@
 import threading
 from datetime import datetime
+from urllib.parse import quote
 from flask import Flask
 import telebot
 from telebot import types
@@ -13,6 +14,8 @@ from config import (
     ADMIN_IDS,
     MASTER_IDS,
     BANK_INFO,
+    QUICK_DEPOSIT_AMOUNTS,
+    QR_AMOUNT_MULTIPLIER,
     QUICK_BET_AMOUNTS,
     QUICK_WITHDRAW_AMOUNTS,
     PORT,
@@ -38,6 +41,7 @@ db.init_db()
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 PENDING_STATE: dict[int, dict] = {}
 
+# ==================== WEB SERVER CHO RENDER ====================
 app = Flask(__name__)
 
 
@@ -54,6 +58,18 @@ def is_master(user_id: int) -> bool:
     return user_id in MASTER_IDS
 
 
+def build_vietqr_url(user_id: int, amount: float) -> str:
+    bank_bin = BANK_INFO.get("bank_bin", "970407")
+    stk = BANK_INFO["stk"]
+    owner = quote(BANK_INFO["owner"])
+    add_info = quote(str(user_id))
+    vnd_amount = max(0, int(round(amount * QR_AMOUNT_MULTIPLIER)))
+    return (
+        f"https://img.vietqr.io/image/{bank_bin}-{stk}-compact2.png"
+        f"?amount={vnd_amount}&addInfo={add_info}&accountName={owner}"
+    )
+
+
 # ==================== BỘ NÚT BẤM ====================
 def kb_user_main(user_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -68,6 +84,20 @@ def kb_user_main(user_id: int) -> types.InlineKeyboardMarkup:
     kb.add(types.InlineKeyboardButton("💰 Số dư & Mã đang đánh", callback_data="u_wallet"))
     if is_admin(user_id):
         kb.add(types.InlineKeyboardButton("🛠️ Menu Admin (Chat riêng)", callback_data="a_panel_open"))
+    return kb
+
+
+def kb_deposit_amounts() -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    btns = [
+        types.InlineKeyboardButton(fmt_num(amt), callback_data=f"u_dep_amt_{amt}")
+        for amt in QUICK_DEPOSIT_AMOUNTS
+    ]
+    kb.add(*btns)
+    kb.add(
+        types.InlineKeyboardButton("✏️ Nhập số khác", callback_data="u_dep_custom"),
+        types.InlineKeyboardButton("🔙 Quay lại", callback_data="u_back"),
+    )
     return kb
 
 
@@ -176,8 +206,15 @@ def kb_approve_deposit(user_id: int) -> types.InlineKeyboardMarkup:
     return kb
 
 
-def kb_deposit_presets(user_id: int) -> types.InlineKeyboardMarkup:
+def kb_deposit_presets(user_id: int, suggested_amt: float = 0.0) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=3)
+    if suggested_amt > 0:
+        kb.add(
+            types.InlineKeyboardButton(
+                f"✅ Đúng số khách chọn (+{fmt_num(suggested_amt)})",
+                callback_data=f"a_dep_amt_{user_id}_{suggested_amt}",
+            )
+        )
     btns = [
         types.InlineKeyboardButton(f"+{fmt_num(amt)}", callback_data=f"a_dep_amt_{user_id}_{amt}")
         for amt in [5000, 10000, 20000, 50000, 100000]
@@ -207,6 +244,50 @@ def get_panel_by_chat(chat_id: int, chat_type: str) -> types.InlineKeyboardMarku
     if chat_id == BILL_GROUP_ID:
         return kb_bill_panel()
     return kb_full_admin_panel()
+
+
+def send_deposit_qr(chat_id: int, user_id: int, amount: float) -> None:
+    PENDING_STATE[user_id] = {"action": "USER_DEPOSIT_PENDING", "amount": amount}
+    qr_url = build_vietqr_url(user_id, amount)
+    vnd_show = int(round(amount * QR_AMOUNT_MULTIPLIER))
+
+    caption = (
+        f"<b>MÃ QR NẠP TIỀN — {BANK_INFO['bank']}</b>\n"
+        f"• Ngân hàng: <b>{BANK_INFO['bank']}</b>\n"
+        f"• Số tài khoản: <code>{BANK_INFO['stk']}</code>\n"
+        f"• Chủ tài khoản: <b>{BANK_INFO['owner']}</b>\n"
+        f"• Số tiền nạp: <b>{fmt_num(amount)}</b> (QR: <b>{fmt_num(vnd_show)}đ</b>)\n"
+        f"• Nội dung chuyển khoản: <code>{user_id}</code>\n\n"
+        f"Quét mã QR hoặc chuyển khoản đúng nội dung <code>{user_id}</code>, "
+        f"sau đó bấm <b>✅ Tôi đã chuyển</b> bên dưới <i>(có thể gửi kèm ảnh bill)</i>."
+    )
+    try:
+        bot.send_photo(chat_id, qr_url, caption=caption, reply_markup=kb_user_deposit())
+    except Exception:
+        bot.send_message(chat_id, caption, reply_markup=kb_user_deposit())
+
+
+def dispatch_withdrawal_to_bill_group(user: dict, w_rec: dict) -> None:
+    if not BILL_GROUP_ID:
+        return
+    assigned_id = int(w_rec["assigned_staff_id"] or 0)
+    approver_txt = f"<code>{assigned_id}</code>" if assigned_id > 0 else "<i>Tất cả nhân viên</i>"
+    w_id = int(w_rec["id"])
+    amt = float(w_rec["amount"])
+    payout_txt = w_rec["payout_text"] or "Xem ảnh mã QR đính kèm"
+
+    caption = (
+        f"💸 <b>YÊU CẦU RÚT TIỀN (#R{w_id:03d})</b>\n"
+        f"• Khách: <b>{user['name']}</b> (@{user['username'] or 'không_có'}) | ID: <code>{user['user_id']}</code>\n"
+        f"• Số tiền rút: <b>{fmt_num(amt)}</b>\n"
+        f"• Thông tin nhận: <code>{payout_txt}</code>\n"
+        f"• Nhân viên chỉ định duyệt: {approver_txt}\n"
+        f"• Thời gian: <code>{w_rec['created_at']}</code>"
+    )
+    if w_rec["qr_file_id"]:
+        bot.send_photo(BILL_GROUP_ID, w_rec["qr_file_id"], caption=caption, reply_markup=kb_withdrawal_actions(w_id))
+    else:
+        bot.send_message(BILL_GROUP_ID, caption, reply_markup=kb_withdrawal_actions(w_id))
 
 
 # ==================== LỆNH KHỞI TẠO ====================
@@ -275,26 +356,37 @@ def on_callback(call: types.CallbackQuery):
         bot.send_message(chat_id, txt, reply_markup=kb_user_main(uid))
 
     elif data == "u_deposit":
-        caption = (
-            f"<b>THÔNG TIN NẠP TIỀN</b>\n"
-            f"• Ngân hàng: <b>{BANK_INFO['bank']}</b>\n"
-            f"• Số tài khoản: <code>{BANK_INFO['stk']}</code>\n"
-            f"• Chủ tài khoản: <b>{BANK_INFO['owner']}</b>\n"
-            f"• Nội dung chuyển khoản: <code>{uid}</code>\n\n"
-            f"Chuyển xong bấm <b>✅ Tôi đã chuyển</b> bên dưới <i>(có thể gửi kèm ảnh bill)</i>."
+        bot.send_message(
+            chat_id,
+            f"<b>CHỌN SỐ TIỀN CẦN NẠP</b>\n"
+            f"• Ngân hàng: <b>{BANK_INFO['bank']}</b> — STK: <code>{BANK_INFO['stk']}</code>\n"
+            f"• Chủ TK: <b>{BANK_INFO['owner']}</b>\n"
+            f"• Nội dung CK mặc định: <code>{uid}</code>\n\n"
+            f"Chọn mức tiền nhanh hoặc bấm <b>Nhập số khác</b> để tạo mã QR:",
+            reply_markup=kb_deposit_amounts(),
         )
-        try:
-            bot.send_photo(chat_id, BANK_INFO["qr_url"], caption=caption, reply_markup=kb_user_deposit())
-        except Exception:
-            bot.send_message(chat_id, caption, reply_markup=kb_user_deposit())
+
+    elif data.startswith("u_dep_amt_"):
+        amt = float(data.split("_")[3])
+        send_deposit_qr(chat_id, uid, amt)
+
+    elif data == "u_dep_custom":
+        PENDING_STATE[uid] = {"action": "USER_DEP_CUSTOM_AMOUNT"}
+        bot.send_message(chat_id, "Nhập số tiền bạn muốn nạp:")
 
     elif data == "u_paid":
+        st = PENDING_STATE.get(uid)
+        dep_amt = float(st["amount"]) if (st and st.get("action") == "USER_DEPOSIT_PENDING") else 0.0
+        if dep_amt > 0:
+            PENDING_STATE[uid] = {"action": "USER_LAST_DEP_AMT", "amount": dep_amt}
         approver_id = get_assigned_approver_id()
-        approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>Nhân viên trực</i>"
+        approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>Tất cả nhân viên</i>"
+        amt_line = f"• Số tiền khách chọn trên QR: <b>{fmt_num(dep_amt)}</b>\n" if dep_amt > 0 else ""
+
         bot.send_message(
             chat_id,
             f"✅ Đã gửi yêu cầu xác nhận nạp tiền cho ID <code>{uid}</code>.\n"
-            f"<i>Nếu có ảnh bill, hãy gửi ảnh vào chat này để duyệt nhanh hơn.</i>",
+            f"<i>Nếu có ảnh bill, hãy gửi ảnh vào chat này để nhân viên đối soát nhanh.</i>",
             reply_markup=kb_user_main(uid),
         )
         if BILL_GROUP_ID:
@@ -302,6 +394,7 @@ def on_callback(call: types.CallbackQuery):
                 BILL_GROUP_ID,
                 f"🔔 <b>YÊU CẦU NẠP TIỀN MỚI</b>\n"
                 f"• Khách: <b>{u['name']}</b> (@{u['username'] or 'không_có'})\n"
+                f"{amt_line}"
                 f"• Nội dung CK / ID: <code>{uid}</code>\n"
                 f"• Nhân viên chỉ định duyệt: {approver_txt}\n"
                 f"• Thời gian: <code>{datetime.now().strftime('%H:%M - %d/%m/%Y')}</code>",
@@ -398,8 +491,8 @@ def on_callback(call: types.CallbackQuery):
             bot.send_message(chat_id, perm_msg)
             return
         target_uid = int(data.split("_")[3])
-        if BILL_GROUP_ID:
-            bot.send_message(BILL_GROUP_ID, f"❌ Đã từ chối yêu cầu nạp của ID <code>{target_uid}</code>.")
+        notify_group_id = BILL_GROUP_ID or chat_id
+        bot.send_message(notify_group_id, f"❌ Đã từ chối yêu cầu nạp của ID <code>{target_uid}</code>.")
         bot.send_message(target_uid, "❌ Yêu cầu nạp tiền của bạn chưa được xác nhận.")
 
     elif data.startswith("a_dep_ok_"):
@@ -409,10 +502,12 @@ def on_callback(call: types.CallbackQuery):
             bot.send_message(chat_id, perm_msg)
             return
         target_uid = int(data.split("_")[3])
+        st_u = PENDING_STATE.get(target_uid)
+        suggested = float(st_u["amount"]) if (st_u and "amount" in st_u) else 0.0
         bot.send_message(
             chat_id,
-            f"Chọn nhanh số tiền cộng cho ID <code>{target_uid}</code> hoặc nhập số khác:",
-            reply_markup=kb_deposit_presets(target_uid),
+            f"Chọn số tiền cộng cho ID <code>{target_uid}</code> hoặc nhập số khác:",
+            reply_markup=kb_deposit_presets(target_uid, suggested),
         )
 
     elif data.startswith("a_dep_amt_"):
@@ -460,8 +555,7 @@ def on_callback(call: types.CallbackQuery):
 
     elif data.startswith("a_wd_ok_"):
         w_id = int(data.split("_")[3])
-        from database import get_withdrawal
-        w_item = get_withdrawal(w_id)
+        w_item = db.get_withdrawal(w_id)
         ok_perm, perm_msg = can_approve_item(uid, w_item["assigned_staff_id"] if w_item else 0)
         if not ok_perm:
             bot.answer_callback_query(call.id, "Không đúng nhân viên được chỉ định duyệt!", show_alert=True)
@@ -484,8 +578,7 @@ def on_callback(call: types.CallbackQuery):
 
     elif data.startswith("a_wd_no_"):
         w_id = int(data.split("_")[3])
-        from database import get_withdrawal
-        w_item = get_withdrawal(w_id)
+        w_item = db.get_withdrawal(w_id)
         ok_perm, perm_msg = can_approve_item(uid, w_item["assigned_staff_id"] if w_item else 0)
         if not ok_perm:
             bot.answer_callback_query(call.id, "Không đúng nhân viên được chỉ định duyệt!", show_alert=True)
@@ -585,30 +678,7 @@ def on_callback(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
 
 
-def dispatch_withdrawal_to_bill_group(user: dict, w_rec: dict) -> None:
-    if not BILL_GROUP_ID:
-        return
-    assigned_id = int(w_rec["assigned_staff_id"] or 0)
-    approver_txt = f"<code>{assigned_id}</code>" if assigned_id > 0 else "<i>Tất cả nhân viên</i>"
-    w_id = int(w_rec["id"])
-    amt = float(w_rec["amount"])
-    payout_txt = w_rec["payout_text"] or "Xem ảnh mã QR đính kèm"
-
-    caption = (
-        f"💸 <b>YÊU CẦU RÚT TIỀN (#R{w_id:03d})</b>\n"
-        f"• Khách: <b>{user['name']}</b> (@{user['username'] or 'không_có'}) | ID: <code>{user['user_id']}</code>\n"
-        f"• Số tiền rút: <b>{fmt_num(amt)}</b>\n"
-        f"• Thông tin nhận: <code>{payout_txt}</code>\n"
-        f"• Nhân viên chỉ định duyệt: {approver_txt}\n"
-        f"• Thời gian: <code>{w_rec['created_at']}</code>"
-    )
-    if w_rec["qr_file_id"]:
-        bot.send_photo(BILL_GROUP_ID, w_rec["qr_file_id"], caption=caption, reply_markup=kb_withdrawal_actions(w_id))
-    else:
-        bot.send_message(BILL_GROUP_ID, caption, reply_markup=kb_withdrawal_actions(w_id))
-
-
-# ==================== XỬ LÝ ẢNH (BILL NẠP HOẶC QR RÚT TIỀN) ====================
+# ==================== XỬ LÝ ẢNH (QR RÚT TIỀN HOẶC BILL NẠP) ====================
 @bot.message_handler(content_types=["photo"])
 def on_photo(message: types.Message):
     if message.chat.type != "private":
@@ -618,7 +688,6 @@ def on_photo(message: types.Message):
     file_id = message.photo[-1].file_id
     state = PENDING_STATE.get(uid)
 
-    # Nếu đang chờ thông tin nhận tiền rút -> nhận ảnh QR rút tiền
     if state and state.get("action") == "USER_WD_INFO":
         PENDING_STATE.pop(uid, None)
         amt = float(state["amount"])
@@ -628,7 +697,6 @@ def on_photo(message: types.Message):
             dispatch_withdrawal_to_bill_group(u, w_rec)
         return
 
-    # Mặc định ảnh ở chat riêng là bill nạp tiền
     bot.send_message(
         message.chat.id,
         f"✅ Đã nhận ảnh bill từ ID <code>{uid}</code>, đang chuyển cho nhân viên kiểm tra.",
@@ -665,6 +733,19 @@ def on_text(message: types.Message):
     if message.chat.type == "private" and state:
         act = state.get("action")
 
+        if act == "USER_DEP_CUSTOM_AMOUNT":
+            PENDING_STATE.pop(uid, None)
+            try:
+                amt = float(txt.replace(".", "").replace(",", ""))
+            except ValueError:
+                bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
+                return
+            if amt <= 0:
+                bot.send_message(message.chat.id, "Số tiền nạp phải lớn hơn 0.", reply_markup=kb_user_main(uid))
+                return
+            send_deposit_qr(message.chat.id, uid, amt)
+            return
+
         if act == "USER_BET_AMOUNT":
             PENDING_STATE.pop(uid, None)
             try:
@@ -680,8 +761,8 @@ def on_text(message: types.Message):
             try:
                 amt = float(txt.replace(".", "").replace(",", ""))
             except ValueError:
-                bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
                 PENDING_STATE.pop(uid, None)
+                bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
                 return
 
             if amt <= 0 or amt > float(u["balance"]) + 1e-6:
@@ -730,7 +811,7 @@ def on_text(message: types.Message):
                     reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
                 )
             except ValueError:
-                bot.send_message(message.chat.id, "Vui lòng nhập Telegram ID dạng số (ví dụ <code>222222222</code> hoặc <code>0</code>).")
+                bot.send_message(message.chat.id, "Vui lòng nhập Telegram ID dạng số (ví dụ <code>7709258303</code> hoặc <code>0</code>).")
             return
 
         if act == "ADMIN_DEP_AMOUNT":
