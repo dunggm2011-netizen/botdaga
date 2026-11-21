@@ -6,7 +6,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8385677064:AAFHuHhOd4Hjxdg8fjR2dGX3KQXvp0SwR
 MASTER_GROUP_ID = int(os.getenv("MASTER_GROUP_ID", "-1004343434771"))
 PRICE_GROUP_ID = int(os.getenv("PRICE_GROUP_ID", "-1004439749096"))
 BILL_GROUP_ID = int(os.getenv("BILL_GROUP_ID", "-1004286708283"))
-MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID", "-1004444444444"))
+MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID", "-1004459438101"))
 
 
 def _parse_ids(env_name: str, default_str: str) -> set[int]:
