@@ -25,10 +25,6 @@ def set_assigned_approver_id(staff_id: int) -> None:
 
 
 def can_approve_item(actor_id: int, specific_assigned_id: int | None = None) -> tuple[bool, str]:
-    """
-    Master luôn có quyền duyệt.
-    Nếu có nhân viên chỉ định cụ thể trên phiếu hoặc mặc định: chỉ người đó (hoặc Master) mới được duyệt.
-    """
     if actor_id in MASTER_IDS:
         return True, ""
 
@@ -36,6 +32,47 @@ def can_approve_item(actor_id: int, specific_assigned_id: int | None = None) -> 
     if target_id > 0 and actor_id != target_id:
         return False, f"Yêu cầu này đang chỉ định cho nhân viên ID <code>{target_id}</code> duyệt."
     return True, ""
+
+
+def parse_price_input(raw_text: str) -> dict:
+    """
+    Hỗ trợ nhập 1 cửa (tự động đảo giá cho cửa còn lại) hoặc nhập cả 2 cửa:
+    - 'XANH 1/10' -> XANH 1/10, ĐỎ 10/1
+    - 'DO 10/1'   -> ĐỎ 10/1, XANH 1/10
+    - 'XANH 1/10 | DO 10/5'
+    """
+    updates: dict[str, float] = {}
+    parts = [p.strip() for p in raw_text.split("|") if p.strip()]
+    if not parts:
+        raise ValueError("Empty price input")
+
+    for part in parts:
+        tokens = part.upper().split()
+        if len(tokens) < 2 or "/" not in tokens[1]:
+            raise ValueError("Invalid price format")
+        side = tokens[0]
+        win_s, lose_s = tokens[1].split("/", 1)
+        win_v, lose_v = float(win_s), float(lose_s)
+        if win_v <= 0 or lose_v <= 0:
+            raise ValueError("Price values must be positive")
+
+        if side == "XANH":
+            updates["xanh_win"] = win_v
+            updates["xanh_lose"] = lose_v
+        elif side in ("DO", "ĐỎ"):
+            updates["do_win"] = win_v
+            updates["do_lose"] = lose_v
+        else:
+            raise ValueError("Unknown side")
+
+    if "xanh_win" in updates and "do_win" not in updates:
+        updates["do_win"] = updates["xanh_lose"]
+        updates["do_lose"] = updates["xanh_win"]
+    elif "do_win" in updates and "xanh_win" not in updates:
+        updates["xanh_win"] = updates["do_lose"]
+        updates["xanh_lose"] = updates["do_win"]
+
+    return updates
 
 
 def get_side_price(do: dict, side: str) -> tuple[float, float]:
@@ -82,28 +119,33 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
     return max(loss_if_xanh, loss_if_do)
 
 
-def place_bet_logic(user_id: int, amount: float, side: str) -> tuple[bool, str]:
+def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
     u = db.get_user(user_id)
-    do = db.get_current_do()
+    open_dos = db.get_open_dos()
+    do = db.get_do_by_id(do_id) if do_id else open_dos[0]
 
-    if do["status"] != "OPEN":
-        return False, "Độ hiện tại đang khóa hoặc đã chốt."
+    if not do or do["status"] != "OPEN":
+        return False, "Độ đã chọn đang khóa hoặc đã chốt."
     if amount <= 0:
         return False, "Số tiền đặt phải lớn hơn 0."
+
+    bal = float(u["balance"])
+    debt = float(u["debt"])
+    debt_limit = float(u["debt_limit"])
+    remaining_debt_room = max(0.0, debt_limit - debt)
+    max_capacity = bal + remaining_debt_room
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
     worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
 
-    remaining_debt_room = max(0.0, float(u["debt_limit"]) - float(u["debt"]))
-    max_capacity = float(u["balance"]) + remaining_debt_room
-
     if worst_loss > max_capacity + 1e-6:
         return (
             False,
-            f"Vượt khả năng chi trả/hạn mức!\n"
-            f"• Rủi ro tối đa sau mã này: <b>{fmt_num(worst_loss)}</b>\n"
-            f"• Khả dụng (Ví + Hạn mức nợ còn): <b>{fmt_num(max_capacity)}</b>",
+            f"❌ Vượt khả năng chi trả / hạn mức nợ!\n"
+            f"• Rủi ro tối đa sau mã này: <b>{fmt_num(worst_loss)}</b> (Giá: <b>{win_u:g}/{lose_u:g}</b>)\n"
+            f"• Khả dụng (Ví <b>{fmt_num(bal)}</b> + Hạn mức nợ còn <b>{fmt_num(remaining_debt_room)}</b>): <b>{fmt_num(max_capacity)}</b>\n"
+            f"• Đang ghi nợ: <b>{fmt_num(debt)} / {fmt_num(debt_limit)}</b>",
         )
 
     seq = int(do["bet_seq"])
@@ -120,7 +162,7 @@ def place_bet_logic(user_id: int, amount: float, side: str) -> tuple[bool, str]:
         lose_amount=calc["lose_amount"],
         price_str=price_str,
     )
-    db.update_current_do(bet_seq=seq + 1)
+    db.update_do(int(do["id"]), bet_seq=seq + 1)
 
     side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
     msg = (
@@ -128,7 +170,7 @@ def place_bet_logic(user_id: int, amount: float, side: str) -> tuple[bool, str]:
         f"• Mã: <b>{code}</b> | Giá lúc đặt: <b>{price_str}</b>\n"
         f"• Mức đánh: <b>{fmt_num(amount)}</b> (Thua mã này: <b>{fmt_num(calc['lose_amount'])}</b>)\n"
         f"• Nếu {side_label} thắng: lời <b>{fmt_num(calc['win_net'])}</b> <i>(đã trừ 5% phế)</i>\n"
-        f"• Ví: <b>{fmt_num(u['balance'])}</b> | Nợ: <b>{fmt_num(u['debt'])}/{fmt_num(u['debt_limit'])}</b>"
+        f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
 
@@ -154,7 +196,6 @@ def create_withdrawal_logic(user_id: int, amount: float, payout_text: str = "", 
     if amount > bal + 1e-6:
         return False, f"Số dư ví không đủ. Số dư hiện tại của bạn là <b>{fmt_num(bal)}</b>.", None
 
-    # Tạm giữ số dư ngay khi tạo lệnh để tránh rút trùng vượt số dư
     new_bal = bal - amount
     info_save = payout_text if payout_text else "[Ảnh mã QR]"
     db.update_user_fields(user_id, balance=new_bal, last_payout_info=info_save)
@@ -181,7 +222,6 @@ def confirm_withdrawal_logic(w_id: int) -> tuple[bool, str, dict | None]:
 
     amt = float(w["amount"])
     db.update_withdrawal(w_id, status="APPROVED")
-    # Chi tiền mặt ra cho khách: trừ vào lợi nhuận thực thu
     db.add_realized_profit(-amt)
     u = db.get_user(int(w["user_id"]))
     return True, f"✅ Đã xác nhận chuyển tiền lệnh <code>#R{w_id:03d}</code> (<b>{fmt_num(amt)}</b>).", {"withdrawal": w, "user": u}
@@ -204,22 +244,15 @@ def reject_withdrawal_logic(w_id: int) -> tuple[bool, str, dict | None]:
     return True, f"❌ Đã từ chối và hoàn lại <b>{fmt_num(amt)}</b> vào ví ID <code>{uid}</code>.", {"withdrawal": w, "balance": refunded_bal}
 
 
-def settle_do_logic(result: str) -> dict:
-    do = db.get_current_do()
+def settle_single_do_no_reopen(do: dict, result: str) -> dict[int, float]:
     do_name = do["name"]
     bets = db.get_active_bets(do_name=do_name)
 
-    if result == "CANCEL":
-        db.update_bets_status_by_do(do_name, "CANCELLED")
-        next_num = int("".join(ch for ch in do_name if ch.isdigit()) or "1") + 1
-        db.update_current_do(name=f"Độ {next_num}", status="OPEN", bet_seq=1)
-        return {"mode": "CANCEL", "do_name": do_name, "next_do": f"Độ {next_num}"}
-
-    if result == "DRAW":
-        db.update_bets_status_by_do(do_name, "DRAW")
-        next_num = int("".join(ch for ch in do_name if ch.isdigit()) or "1") + 1
-        db.update_current_do(name=f"Độ {next_num}", status="OPEN", bet_seq=1)
-        return {"mode": "DRAW", "do_name": do_name, "next_do": f"Độ {next_num}"}
+    if result in ("CANCEL", "DRAW"):
+        status_val = "CANCELLED" if result == "CANCEL" else "DRAW"
+        db.update_bets_status_by_do(do_name, status_val)
+        db.update_do(int(do["id"]), status="CLOSED")
+        return {}
 
     per_user_net: dict[int, float] = {}
     for b in bets:
@@ -232,8 +265,25 @@ def settle_do_logic(result: str) -> dict:
             db.update_bet_status(int(b["id"]), "LOST")
             per_user_net[uid] -= float(b["lose_amount"])
 
-    settled_users = []
-    for uid, net in per_user_net.items():
+    db.update_do(int(do["id"]), status="CLOSED")
+    return per_user_net
+
+
+def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
+    settled_names: list[str] = []
+    combined_net: dict[int, float] = {}
+
+    for d_id in do_ids:
+        do = db.get_do_by_id(d_id)
+        if not do or do["status"] != "OPEN":
+            continue
+        settled_names.append(do["name"])
+        part_net = settle_single_do_no_reopen(do, result)
+        for uid, val in part_net.items():
+            combined_net[uid] = combined_net.get(uid, 0.0) + val
+
+    users_summary = []
+    for uid, net in combined_net.items():
         u = db.get_user(uid)
         bal = float(u["balance"])
         debt = float(u["debt"])
@@ -256,7 +306,7 @@ def settle_do_logic(result: str) -> dict:
                 debt += remain_loss
 
         db.update_user_fields(uid, balance=bal, debt=debt, pnl_net=pnl)
-        settled_users.append({
+        users_summary.append({
             "user_id": uid,
             "name": u["name"],
             "net": net,
@@ -264,55 +314,57 @@ def settle_do_logic(result: str) -> dict:
             "debt": debt,
         })
 
-    next_num = int("".join(ch for ch in do_name if ch.isdigit()) or "1") + 1
-    db.update_current_do(name=f"Độ {next_num}", status="OPEN", bet_seq=1)
-
+    open_after = db.get_open_dos()
     return {
-        "mode": "SETTLED",
-        "do_name": do_name,
+        "do_names": settled_names,
         "result": result,
-        "users": settled_users,
-        "next_do": f"Độ {next_num}",
+        "users": users_summary,
+        "open_dos": [d["name"] for d in open_after],
     }
 
 
 def build_live_report_text() -> str:
-    do = db.get_current_do()
-    active_bets = db.get_active_bets(do_name=do["name"])
+    open_dos = db.get_open_dos()
+    blocks = []
 
-    tot_xanh = sum(float(b["amount"]) for b in active_bets if b["side"] == "XANH")
-    tot_do = sum(float(b["amount"]) for b in active_bets if b["side"] == "DO")
+    for do in open_dos:
+        active_bets = db.get_active_bets(do_name=do["name"])
+        tot_xanh = sum(float(b["amount"]) for b in active_bets if b["side"] == "XANH")
+        tot_do = sum(float(b["amount"]) for b in active_bets if b["side"] == "DO")
 
-    by_user: dict[int, dict[str, float]] = {}
-    for b in active_bets:
-        uid = int(b["user_id"])
-        by_user.setdefault(uid, {"XANH": 0.0, "DO": 0.0, "count": 0})
-        by_user[uid][b["side"]] += float(b["amount"])
-        by_user[uid]["count"] += 1
+        by_user: dict[int, dict[str, float]] = {}
+        for b in active_bets:
+            uid = int(b["user_id"])
+            by_user.setdefault(uid, {"XANH": 0.0, "DO": 0.0, "count": 0})
+            by_user[uid][b["side"]] += float(b["amount"])
+            by_user[uid]["count"] += 1
 
-    user_lines = []
-    for uid, st in by_user.items():
-        u = db.get_user(uid)
-        user_lines.append(
-            f"• <b>{u['name']}</b> (<code>{uid}</code>): XANH <b>{fmt_num(st['XANH'])}</b> | "
-            f"ĐỎ <b>{fmt_num(st['DO'])}</b> ({int(st['count'])} mã)"
+        user_lines = []
+        for uid, st in by_user.items():
+            u = db.get_user(uid)
+            user_lines.append(
+                f"  • <b>{u['name']}</b> (<code>{uid}</code>): XANH <b>{fmt_num(st['XANH'])}</b> | "
+                f"ĐỎ <b>{fmt_num(st['DO'])}</b> ({int(st['count'])} mã)"
+            )
+
+        code_lines = []
+        for b in active_bets:
+            u = db.get_user(int(b["user_id"]))
+            side_icon = "🟢 XANH" if b["side"] == "XANH" else "🔴 ĐỎ"
+            code_lines.append(
+                f"  • <code>{b['code']}</code> | <b>{u['name']}</b> | "
+                f"{side_icon} <b>{fmt_num(float(b['amount']))}</b> (giá {b['price_str']})"
+            )
+
+        blocks.append(
+            f"<b>📌 {do['name']}</b> (XANH <code>{float(do['xanh_win']):g}/{float(do['xanh_lose']):g}</code> | "
+            f"ĐỎ <code>{float(do['do_win']):g}/{float(do['do_lose']):g}</code>)\n"
+            f"• Tổng XANH: <b>{fmt_num(tot_xanh)}</b> | Tổng ĐỎ: <b>{fmt_num(tot_do)}</b>\n"
+            + ("\n".join(user_lines) if user_lines else "  <i>Chưa có cược.</i>")
+            + ("\n" + "\n".join(code_lines) if code_lines else "")
         )
 
-    code_lines = []
-    for b in active_bets:
-        u = db.get_user(int(b["user_id"]))
-        side_icon = "🟢 XANH" if b["side"] == "XANH" else "🔴 ĐỎ"
-        code_lines.append(
-            f"• <code>{b['code']}</code> | <b>{u['name']}</b> | "
-            f"{side_icon} <b>{fmt_num(float(b['amount']))}</b> (giá {b['price_str']})"
-        )
-
-    return (
-        f"<b>THỐNG KÊ {do['name']} ĐANG DIỄN RA</b>\n"
-        f"• Tổng XANH: <b>{fmt_num(tot_xanh)}</b> | Tổng ĐỎ: <b>{fmt_num(tot_do)}</b>\n\n"
-        f"<b>Theo khách:</b>\n" + ("\n".join(user_lines) or "<i>Chưa có cược.</i>") + "\n\n"
-        f"<b>Mã cược đang diễn ra:</b>\n" + ("\n".join(code_lines) or "<i>Không có mã nào.</i>")
-    )
+    return "<b>THỐNG KÊ CÁC ĐỘ ĐANG MỞ</b>\n\n" + "\n\n".join(blocks)
 
 
 def build_pnl_report_text() -> str:
