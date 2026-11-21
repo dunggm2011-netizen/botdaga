@@ -26,10 +26,10 @@ def init_db() -> None:
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS current_do (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS dos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'OPEN',
                 xanh_win REAL DEFAULT 10.0,
                 xanh_lose REAL DEFAULT 10.0,
                 do_win REAL DEFAULT 10.0,
@@ -81,8 +81,8 @@ def init_db() -> None:
         """)
 
         cur.execute("""
-            INSERT OR IGNORE INTO current_do (id, name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-            VALUES (1, 'Độ 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
+            INSERT OR IGNORE INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
+            VALUES ('Độ 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
         """)
 
         cur.execute("""
@@ -165,19 +165,75 @@ def update_user_fields(user_id: int, **kwargs) -> None:
         conn.commit()
 
 
-def get_current_do() -> dict:
+def get_next_do_name() -> str:
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM current_do WHERE id = 1").fetchone()
-        return dict(row)
+        rows = conn.execute("SELECT name FROM dos").fetchall()
+    max_num = 0
+    for r in rows:
+        digits = "".join(ch for ch in str(r["name"]) if ch.isdigit())
+        if digits.isdigit():
+            max_num = max(max_num, int(digits))
+    return f"Độ {max_num + 1}"
 
 
-def update_current_do(**kwargs) -> None:
+def get_do_by_id(do_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM dos WHERE id = ?", (do_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_do_by_name(name: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM dos WHERE name = ?", (name,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_open_dos() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
+        if not rows:
+            next_name = get_next_do_name()
+            conn.execute(
+                """
+                INSERT INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
+                VALUES (?, 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
+                """,
+                (next_name,),
+            )
+            conn.commit()
+            rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_new_do(name: str | None = None, xanh_win: float = 10.0, xanh_lose: float = 10.0,
+                  do_win: float = 10.0, do_lose: float = 10.0) -> dict:
+    do_name = name or get_next_do_name()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
+            VALUES (?, 'OPEN', ?, ?, ?, ?, 1)
+            ON CONFLICT(name) DO UPDATE SET
+                status = 'OPEN',
+                xanh_win = excluded.xanh_win,
+                xanh_lose = excluded.xanh_lose,
+                do_win = excluded.do_win,
+                do_lose = excluded.do_lose,
+                bet_seq = 1
+            """,
+            (do_name, xanh_win, xanh_lose, do_win, do_lose),
+        )
+        conn.commit()
+    return get_do_by_name(do_name)  # type: ignore
+
+
+def update_do(do_id: int, **kwargs) -> None:
     if not kwargs:
         return
     cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
-    vals = list(kwargs.values())
+    vals = list(kwargs.values()) + [do_id]
     with get_conn() as conn:
-        conn.execute(f"UPDATE current_do SET {cols} WHERE id = 1", vals)
+        conn.execute(f"UPDATE dos SET {cols} WHERE id = ?", vals)
         conn.commit()
 
 
