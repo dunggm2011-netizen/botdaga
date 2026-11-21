@@ -75,6 +75,19 @@ def parse_price_input(raw_text: str) -> dict:
     return updates
 
 
+def parse_single_side_ratio(raw_text: str, chosen_side: str) -> dict:
+    """Nhập tỷ lệ cho 1 cửa đã chọn (VD: '5/10' hoặc 'XANH 5/10'), tự đảo chiều cho cửa còn lại."""
+    ratio_token = raw_text.strip().split()[-1]
+    w_s, l_s = ratio_token.split("/", 1)
+    w_v, l_v = float(w_s), float(l_s)
+    if w_v <= 0 or l_v <= 0:
+        raise ValueError("Ratio must be positive")
+
+    if chosen_side.upper() == "XANH":
+        return {"xanh_win": w_v, "xanh_lose": l_v, "do_win": l_v, "do_lose": w_v}
+    return {"do_win": w_v, "do_lose": l_v, "xanh_win": l_v, "xanh_lose": w_v}
+
+
 def get_side_price(do: dict, side: str) -> tuple[float, float]:
     if side == "XANH":
         return float(do["xanh_win"]), float(do["xanh_lose"])
@@ -135,11 +148,25 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     remaining_debt_room = max(0.0, debt_limit - debt)
     max_capacity = bal + remaining_debt_room
 
+    existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
+    existing_principal = sum(float(b["amount"]) for b in existing_bets)
+    new_total_principal = existing_principal + amount
+
+    # 1. Chặn cứng tổng tiền gốc không vượt quá khả dụng (Ví + Hạn mức nợ còn lại)
+    if new_total_principal > max_capacity + 1e-6:
+        remain_principal = max(0.0, max_capacity - existing_principal)
+        return (
+            False,
+            f"❌ Vượt tiền gốc cho phép!\n"
+            f"• Tiền gốc mã này: <b>{fmt_num(amount)}</b> | Tổng gốc sau mã này: <b>{fmt_num(new_total_principal)}</b>\n"
+            f"• Hạn mức gốc tối đa (Ví <b>{fmt_num(bal)}</b> + Hạn mức nợ còn <b>{fmt_num(remaining_debt_room)}</b>): <b>{fmt_num(max_capacity)}</b>\n"
+            f"• Tiền gốc còn có thể đánh thêm ở độ này: <b>{fmt_num(remain_principal)}</b>",
+        )
+
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Kiểm tra gác kèo theo đầu thắng sau 5% phế của cửa đối diện
-    existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
+    # 2. Kiểm tra gác kèo theo đầu thắng sau 5% phế của cửa đối diện
     opp_side = "XANH" if side == "DO" else "DO"
     opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
     same_side_lose = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side)
@@ -155,14 +182,14 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
             f"• Mã này cần chịu: <b>{fmt_num(float(calc['lose_amount']))}</b>",
         )
 
+    # 3. Kiểm tra rủi ro xấu nhất (vẫn cho phép ăn lớn ở tỷ lệ cao như 1/10 đánh 10tr ăn 100tr)
     worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
     if worst_loss > max_capacity + 1e-6:
         return (
             False,
             f"❌ Vượt khả năng chi trả / hạn mức nợ!\n"
             f"• Rủi ro tối đa sau mã này: <b>{fmt_num(worst_loss)}</b> (Giá: <b>{win_u:g}/{lose_u:g}</b>)\n"
-            f"• Khả dụng (Ví <b>{fmt_num(bal)}</b> + Hạn mức nợ còn <b>{fmt_num(remaining_debt_room)}</b>): <b>{fmt_num(max_capacity)}</b>\n"
-            f"• Đang ghi nợ: <b>{fmt_num(debt)} / {fmt_num(debt_limit)}</b>",
+            f"• Khả dụng (Ví <b>{fmt_num(bal)}</b> + Hạn mức nợ còn <b>{fmt_num(remaining_debt_room)}</b>): <b>{fmt_num(max_capacity)}</b>",
         )
 
     seq = int(do["bet_seq"])
@@ -187,6 +214,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         f"• Mã: <b>{code}</b> | Giá lúc đặt: <b>{price_str}</b>\n"
         f"• Mức đánh: <b>{fmt_num(amount)}</b> (Thua mã này: <b>{fmt_num(calc['lose_amount'])}</b>)\n"
         f"• Nếu {side_label} thắng: lời <b>{fmt_num(calc['win_net'])}</b> <i>(đã trừ 5% phế)</i>\n"
+        f"• Tổng gốc đang chạy ở độ này: <b>{fmt_num(new_total_principal)} / {fmt_num(max_capacity)}</b>\n"
         f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
@@ -348,8 +376,6 @@ def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict
     now = datetime.now()
     day_key = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M - %d/%m/%Y")
-
-    # Lưu ý: nhà cái/cổ đông ăn ngược chiều với khách (khách thua -> nhà cái lời)
     house_net = -sum(do_user_net.values())
 
     lines = [
