@@ -34,8 +34,11 @@ from logic import (
     confirm_withdrawal_logic,
     reject_withdrawal_logic,
     settle_multiple_dos_logic,
+    record_and_format_per_do_report,
     build_live_report_text,
     build_pnl_report_text,
+    build_daily_report_text,
+    close_day_accounting_logic,
 )
 
 db.init_db()
@@ -56,6 +59,14 @@ def is_admin(user_id: int) -> bool:
 
 def is_master(user_id: int) -> bool:
     return user_id in MASTER_IDS
+
+
+def is_master_group(chat_id: int) -> bool:
+    return bool(MASTER_GROUP_ID and chat_id == MASTER_GROUP_ID)
+
+
+def can_view_master_report(user_id: int, chat_id: int) -> bool:
+    return is_master(user_id) or is_master_group(chat_id)
 
 
 def build_vietqr_url(user_id: int, amount: float) -> str:
@@ -121,7 +132,7 @@ def kb_user_deposit() -> types.InlineKeyboardMarkup:
 
 
 def kb_user_amounts(side: str, do_id: int) -> types.InlineKeyboardMarkup:
-    kb = types.InlineKeyboardMarkup(row_width=3)
+    kb = types.InlineKeyboardMarkup(row_width=2)
     btns = [
         types.InlineKeyboardButton(fmt_num(amt), callback_data=f"u_bet_{side}_{do_id}_{amt}")
         for amt in QUICK_BET_AMOUNTS
@@ -148,17 +159,32 @@ def kb_withdraw_amounts() -> types.InlineKeyboardMarkup:
     return kb
 
 
+def kb_master_viewer_panel() -> types.InlineKeyboardMarkup:
+    """Dành cho cổ đông / thành viên xem báo cáo trực tiếp ngay trong nhóm Master."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("📋 Độ đang chạy", callback_data="a_rep_live"),
+        types.InlineKeyboardButton("📈 Ăn thua từng độ / HT", callback_data="a_rep_pnl"),
+    )
+    kb.add(types.InlineKeyboardButton("📊 Báo cáo ăn thua cả ngày", callback_data="a_rep_daily"))
+    return kb
+
+
 def kb_master_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("📋 Độ & Mã đang chạy", callback_data="a_rep_live"),
-        types.InlineKeyboardButton("📈 Ăn thua tới hiện tại", callback_data="a_rep_pnl"),
+        types.InlineKeyboardButton("📋 Độ đang chạy", callback_data="a_rep_live"),
+        types.InlineKeyboardButton("📈 Ăn thua từng độ / HT", callback_data="a_rep_pnl"),
     )
+    kb.add(types.InlineKeyboardButton("📊 Báo cáo ăn thua cả ngày", callback_data="a_rep_daily"))
     kb.add(
         types.InlineKeyboardButton("💳 Cấp hạn mức nợ", callback_data="a_set_debt_limit"),
         types.InlineKeyboardButton("💵 Thu nợ / Xóa nợ", callback_data="a_debt_menu"),
     )
-    kb.add(types.InlineKeyboardButton("👤 Chỉ định nhân viên duyệt", callback_data="a_assign_approver"))
+    kb.add(
+        types.InlineKeyboardButton("👤 Chỉ định duyệt", callback_data="a_assign_approver"),
+        types.InlineKeyboardButton("🌙 Chốt sổ cuối ngày", callback_data="a_day_reset"),
+    )
     return kb
 
 
@@ -181,9 +207,10 @@ def kb_bill_panel() -> types.InlineKeyboardMarkup:
 def kb_full_admin_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("📋 Độ & Mã đang chạy", callback_data="a_rep_live"),
-        types.InlineKeyboardButton("📈 Ăn thua tới hiện tại", callback_data="a_rep_pnl"),
+        types.InlineKeyboardButton("📋 Độ đang chạy", callback_data="a_rep_live"),
+        types.InlineKeyboardButton("📈 Ăn thua từng độ / HT", callback_data="a_rep_pnl"),
     )
+    kb.add(types.InlineKeyboardButton("📊 Báo cáo ăn thua cả ngày", callback_data="a_rep_daily"))
     kb.add(
         types.InlineKeyboardButton("➕ Mở độ mới", callback_data="a_new_do"),
         types.InlineKeyboardButton("✏️ Đổi giá độ", callback_data="a_set_price"),
@@ -193,7 +220,10 @@ def kb_full_admin_panel() -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton("💳 Cấp hạn mức nợ", callback_data="a_set_debt_limit"),
         types.InlineKeyboardButton("💵 Thu nợ / Xóa nợ", callback_data="a_debt_menu"),
     )
-    kb.add(types.InlineKeyboardButton("👤 Chỉ định nhân viên duyệt", callback_data="a_assign_approver"))
+    kb.add(
+        types.InlineKeyboardButton("👤 Chỉ định duyệt", callback_data="a_assign_approver"),
+        types.InlineKeyboardButton("🌙 Chốt sổ cuối ngày", callback_data="a_day_reset"),
+    )
     return kb
 
 
@@ -273,11 +303,11 @@ def kb_withdrawal_actions(w_id: int) -> types.InlineKeyboardMarkup:
     return kb
 
 
-def get_panel_by_chat(chat_id: int, chat_type: str) -> types.InlineKeyboardMarkup:
+def get_panel_by_chat(chat_id: int, chat_type: str, user_id: int = 0) -> types.InlineKeyboardMarkup:
     if chat_type == "private":
         return kb_full_admin_panel()
     if chat_id == MASTER_GROUP_ID:
-        return kb_master_panel()
+        return kb_master_panel() if is_master(user_id) else kb_master_viewer_panel()
     if chat_id == PRICE_GROUP_ID:
         return kb_price_panel()
     if chat_id == BILL_GROUP_ID:
@@ -346,11 +376,32 @@ def dispatch_withdrawal_to_bill_group(user: dict, w_rec: dict) -> None:
         bot.send_message(BILL_GROUP_ID, caption, reply_markup=kb_withdrawal_actions(w_id))
 
 
+def send_report_to_master(report_type: str, actor_id: int, source_chat_id: int, source_chat_type: str) -> None:
+    if report_type == "live":
+        report_txt = build_live_report_text()
+    elif report_type == "daily":
+        report_txt = build_daily_report_text()
+    else:
+        report_txt = build_pnl_report_text()
+
+    if source_chat_id == MASTER_GROUP_ID:
+        bot.send_message(MASTER_GROUP_ID, report_txt, reply_markup=get_panel_by_chat(MASTER_GROUP_ID, "group", actor_id))
+    elif MASTER_GROUP_ID:
+        bot.send_message(MASTER_GROUP_ID, report_txt, reply_markup=get_panel_by_chat(MASTER_GROUP_ID, "group", 0))
+        if source_chat_type == "private":
+            bot.send_message(source_chat_id, "✅ Đã gửi báo cáo về <b>nhóm Master</b>.", reply_markup=kb_full_admin_panel())
+    else:
+        bot.send_message(source_chat_id, report_txt, reply_markup=get_panel_by_chat(source_chat_id, source_chat_type, actor_id))
+
+
 # ==================== LỆNH KHỞI TẠO ====================
 @bot.message_handler(commands=["start", "menu"])
 def cmd_start(message: types.Message):
     uid = message.from_user.id
-    if message.chat.type == "private":
+    chat_id = message.chat.id
+    chat_type = message.chat.type
+
+    if chat_type == "private":
         u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
         txt = (
             f"Xin chào <b>{u['name']}</b> (ID: <code>{u['user_id']}</code>)\n"
@@ -358,24 +409,47 @@ def cmd_start(message: types.Message):
             f"• Hạn mức ghi nợ: <b>{fmt_num(float(u['debt']))}</b> / <b>{fmt_num(float(u['debt_limit']))}</b>\n\n"
             f"Chọn nút bên dưới để thao tác:"
         )
-        bot.send_message(message.chat.id, txt, reply_markup=kb_user_main(uid))
+        bot.send_message(chat_id, txt, reply_markup=kb_user_main(uid))
+    elif is_master_group(chat_id):
+        bot.send_message(
+            chat_id,
+            "<b>BẢNG BÁO CÁO & QUẢN LÝ NHÓM MASTER</b>",
+            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
+        )
     elif is_admin(uid):
         bot.send_message(
-            message.chat.id,
+            chat_id,
             "<b>BẢNG ĐIỀU KHIỂN VẬN HÀNH</b>",
-            reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
 
 
 @bot.message_handler(commands=["admin"])
 def cmd_admin(message: types.Message):
     uid = message.from_user.id
-    if is_admin(uid):
+    if is_admin(uid) or is_master_group(message.chat.id):
         bot.send_message(
             message.chat.id,
-            "<b>BẢNG ĐIỀU KHIỂN ADMIN</b>",
-            reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+            "<b>BẢNG ĐIỀU KHIỂN</b>",
+            reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
         )
+
+
+@bot.message_handler(commands=["baocao", "pnl", "cangay"])
+def cmd_report_shortcut(message: types.Message):
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    chat_type = message.chat.type
+    if not can_view_master_report(uid, chat_id) and not (chat_type == "private" and is_admin(uid)):
+        return
+    cmd = message.text.lower().split()[0]
+    if cmd == "/baocao":
+        rtype = "live"
+    elif cmd == "/cangay":
+        rtype = "daily"
+    else:
+        rtype = "pnl"
+    send_report_to_master(rtype, uid, chat_id, chat_type)
 
 
 # ==================== XỬ LÝ NÚT BẤM ====================
@@ -524,6 +598,26 @@ def on_callback(call: types.CallbackQuery):
         PENDING_STATE[uid] = {"action": "USER_BET_AMOUNT", "side": side, "do_id": int(do_id_s)}
         bot.send_message(chat_id, f"Nhập số tiền bạn muốn đánh cửa <b>{side}</b>:")
 
+    # --- BÁO CÁO CHO MASTER & CỔ ĐÔNG TRONG NHÓM MASTER ---
+    elif data in ("a_rep_live", "a_rep_pnl", "a_rep_daily"):
+        if not can_view_master_report(uid, chat_id) and not (chat_type == "private" and is_admin(uid)):
+            bot.answer_callback_query(call.id, "Báo cáo này chỉ dành cho Master và nhóm Master.", show_alert=True)
+            return
+        rtype = "live" if data == "a_rep_live" else ("daily" if data == "a_rep_daily" else "pnl")
+        send_report_to_master(rtype, uid, chat_id, chat_type)
+
+    elif data == "a_day_reset":
+        if not is_master(uid):
+            bot.answer_callback_query(call.id, "Chỉ Master mới được chốt sổ cuối ngày.", show_alert=True)
+            return
+        snapshot = close_day_accounting_logic()
+        target_out = MASTER_GROUP_ID or chat_id
+        bot.send_message(
+            target_out,
+            f"🌙 <b>ĐÃ CHỐT SỔ CUỐI NGÀY</b>\n\n{snapshot}",
+            reply_markup=get_panel_by_chat(target_out, "group" if target_out != uid else "private", uid),
+        )
+
     # --- ADMIN / MASTER / STAFF ACTIONS ---
     elif data.startswith("a_") and not is_admin(uid):
         bot.answer_callback_query(call.id, "Bạn không có quyền thao tác mục này.", show_alert=True)
@@ -538,7 +632,7 @@ def on_callback(call: types.CallbackQuery):
             chat_id,
             f"✅ Đã mở thêm <b>{created['name']}</b> (XANH <code>{float(created['xanh_win']):g}/{float(created['xanh_lose']):g}</code> | "
             f"ĐỎ <code>{float(created['do_win']):g}/{float(created['do_lose']):g}</code>).",
-            reply_markup=get_panel_by_chat(chat_id, chat_type),
+            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
 
     elif data == "a_set_price":
@@ -627,8 +721,8 @@ def on_callback(call: types.CallbackQuery):
 
         PENDING_STATE.pop(uid, None)
         out = settle_multiple_dos_logic(list(sel), result)
-        target_out_chat = PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id
-        panel_out = get_panel_by_chat(target_out_chat, "group" if target_out_chat != uid else "private")
+        target_out_chat = MASTER_GROUP_ID if MASTER_GROUP_ID else (PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id)
+        panel_out = get_panel_by_chat(target_out_chat, "group" if target_out_chat != uid else "private", uid)
         do_names_str = ", ".join(out["do_names"])
 
         if result == "CANCEL":
@@ -651,6 +745,12 @@ def on_callback(call: types.CallbackQuery):
                 )
             lines.append(f"\n📌 Độ đang mở hiện tại: <b>{', '.join(out['open_dos'])}</b>")
             bot.send_message(target_out_chat, "\n".join(lines), reply_markup=panel_out)
+
+        # Gửi báo cáo ăn thua từng độ vào nhóm Master
+        if MASTER_GROUP_ID:
+            for d_name in out["do_names"]:
+                per_do_txt = record_and_format_per_do_report(d_name, result, out["per_do_net"].get(d_name, {}))
+                bot.send_message(MASTER_GROUP_ID, per_do_txt)
 
     elif data == "a_assign_approver":
         if not is_master(uid):
@@ -744,7 +844,7 @@ def on_callback(call: types.CallbackQuery):
             return
 
         ok_wd, wd_msg, wd_info = confirm_withdrawal_logic(w_id)
-        bot.send_message(chat_id, wd_msg, reply_markup=get_panel_by_chat(chat_id, chat_type))
+        bot.send_message(chat_id, wd_msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
         if ok_wd and wd_info:
             w_rec = wd_info["withdrawal"]
             u_rec = wd_info["user"]
@@ -767,7 +867,7 @@ def on_callback(call: types.CallbackQuery):
             return
 
         ok_wd, wd_msg, wd_info = reject_withdrawal_logic(w_id)
-        bot.send_message(chat_id, wd_msg, reply_markup=get_panel_by_chat(chat_id, chat_type))
+        bot.send_message(chat_id, wd_msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
         if ok_wd and wd_info:
             w_rec = wd_info["withdrawal"]
             bot.send_message(
@@ -799,18 +899,6 @@ def on_callback(call: types.CallbackQuery):
             "• Xóa nợ khi chốt mất: <code>XOA USER_ID</code>\n"
             "Ví dụ: <code>THU 123456 5000000</code>",
         )
-
-    elif data == "a_rep_live":
-        if not is_master(uid) and chat_type != "private":
-            bot.answer_callback_query(call.id, "Chỉ Master mới xem báo cáo này.", show_alert=True)
-            return
-        bot.send_message(chat_id, build_live_report_text(), reply_markup=get_panel_by_chat(chat_id, chat_type))
-
-    elif data == "a_rep_pnl":
-        if not is_master(uid) and chat_type != "private":
-            bot.answer_callback_query(call.id, "Chỉ Master mới xem báo cáo này.", show_alert=True)
-            return
-        bot.send_message(chat_id, build_pnl_report_text(), reply_markup=get_panel_by_chat(chat_id, chat_type))
 
     bot.answer_callback_query(call.id)
 
@@ -945,7 +1033,7 @@ def on_text(message: types.Message):
                 bot.send_message(
                     message.chat.id,
                     f"✅ Đã cập nhật nhân viên chỉ định duyệt mặc định: {desc}",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
             except ValueError:
                 bot.send_message(message.chat.id, "Vui lòng nhập Telegram ID dạng số (ví dụ <code>7709258303</code> hoặc <code>0</code>).")
@@ -1000,13 +1088,13 @@ def on_text(message: types.Message):
                     f"✅ Đã cập nhật giá cho <b>{target_label}</b>:\n"
                     f"• XANH: <b>{float(first_do['xanh_win']):g}/{float(first_do['xanh_lose']):g}</b>\n"
                     f"• ĐỎ: <b>{float(first_do['do_win']):g}/{float(first_do['do_lose']):g}</b>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
             except Exception:
                 bot.send_message(
                     message.chat.id,
                     "Sai định dạng. Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>).",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
 
         elif act == "MASTER_SET_DEBT_LIMIT":
@@ -1022,13 +1110,13 @@ def on_text(message: types.Message):
                 bot.send_message(
                     message.chat.id,
                     f"✅ Đã đặt hạn mức ghi nợ cho ID <code>{target_uid}</code> ({u_target['name']}): <b>{fmt_num(limit_val)}</b>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
             except Exception:
                 bot.send_message(
                     message.chat.id,
                     "Sai mẫu. Ví dụ đúng: <code>123456 20000000</code>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
 
         elif act == "MASTER_COLLECT_OR_CLEAR_DEBT":
@@ -1052,26 +1140,26 @@ def on_text(message: types.Message):
                         f"💵 Đã thu <b>+{fmt_num(amt)}</b> từ ID <code>{target_uid}</code>.\n"
                         f"• Trừ nợ: <b>{fmt_num(paid_debt)}</b> | Nợ còn: <b>{fmt_num(cur_debt - paid_debt)}</b>\n"
                         f"• Cộng vào lợi nhuận thực thu: <b>+{fmt_num(amt)}</b>",
-                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                     )
                 elif cmd_type == "XOA":
                     db.update_user_fields(target_uid, debt=0.0)
                     bot.send_message(
                         message.chat.id,
                         f"🗑️ Đã xóa nợ treo <b>{fmt_num(cur_debt)}</b> cho ID <code>{target_uid}</code>.",
-                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                     )
                 else:
                     bot.send_message(
                         message.chat.id,
                         "Dùng <code>THU ID SỐ_TIỀN</code> hoặc <code>XOA ID</code>.",
-                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                     )
             except Exception:
                 bot.send_message(
                     message.chat.id,
                     "Sai mẫu thu/xóa nợ.",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
 
 
