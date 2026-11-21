@@ -82,10 +82,10 @@ def get_side_price(do: dict, side: str) -> tuple[float, float]:
 
 
 def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
-    win_u = win_u if win_u > 0 else 10.0
-    lose_u = lose_u if lose_u > 0 else 10.0
-    win_gross = amount
-    lose_amount = amount * (lose_u / win_u)
+    base_u = win_u if win_u > 0 else 10.0
+    pay_u = lose_u if lose_u > 0 else 10.0
+    lose_amount = amount
+    win_gross = amount * (pay_u / base_u)
     win_net = win_gross * (1.0 - FEE_RATE)  # Trừ 5% phế trên phần tiền lời
     return {
         "amount": amount,
@@ -137,8 +137,25 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
-    worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
 
+    # Kiểm tra gác kèo theo đầu thắng sau 5% phế của cửa đối diện
+    existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
+    opp_side = "XANH" if side == "DO" else "DO"
+    opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    same_side_lose = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side)
+    new_same_side_lose = same_side_lose + float(calc["lose_amount"])
+
+    if opp_win_net > 0 and new_same_side_lose > opp_win_net + max_capacity + 1e-6:
+        max_hedge_allowed = max(0.0, (opp_win_net + max_capacity) - same_side_lose)
+        return (
+            False,
+            f"❌ Vượt mức gác cho phép!\n"
+            f"• Đầu thắng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
+            f"• Mức thua tối đa có thể gác thêm cho cửa {side}: <b>{fmt_num(max_hedge_allowed)}</b>\n"
+            f"• Mã này cần chịu: <b>{fmt_num(float(calc['lose_amount']))}</b>",
+        )
+
+    worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
     if worst_loss > max_capacity + 1e-6:
         return (
             False,
@@ -272,13 +289,16 @@ def settle_single_do_no_reopen(do: dict, result: str) -> dict[int, float]:
 def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
     settled_names: list[str] = []
     combined_net: dict[int, float] = {}
+    per_do_net: dict[str, dict[int, float]] = {}
 
     for d_id in do_ids:
         do = db.get_do_by_id(d_id)
         if not do or do["status"] != "OPEN":
             continue
-        settled_names.append(do["name"])
+        d_name = do["name"]
+        settled_names.append(d_name)
         part_net = settle_single_do_no_reopen(do, result)
+        per_do_net[d_name] = part_net
         for uid, val in part_net.items():
             combined_net[uid] = combined_net.get(uid, 0.0) + val
 
@@ -319,8 +339,38 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
         "do_names": settled_names,
         "result": result,
         "users": users_summary,
+        "per_do_net": per_do_net,
         "open_dos": [d["name"] for d in open_after],
     }
+
+
+def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict[int, float]) -> str:
+    now = datetime.now()
+    day_key = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M - %d/%m/%Y")
+
+    # Lưu ý: nhà cái/cổ đông ăn ngược chiều với khách (khách thua -> nhà cái lời)
+    house_net = -sum(do_user_net.values())
+
+    lines = [
+        f"<b>📌 BÁO CÁO ĂN THUA — {do_name} (KQ: {result})</b>",
+        f"<i>Thời gian chốt: {time_str}</i>\n",
+    ]
+    if not do_user_net:
+        lines.append("• <i>Không có mã cược ăn/thua ở độ này.</i>")
+    else:
+        lines.append("<b>Chi tiết từng khách ở độ này:</b>")
+        for uid, net in do_user_net.items():
+            u = db.get_user(uid)
+            lines.append(
+                f"• <b>{u['name']}</b> (<code>{uid}</code>): Khách {fmt_signed(net)} | "
+                f"Ví: <b>{fmt_num(float(u['balance']))}</b> | Nợ: <b>{fmt_num(float(u['debt']))}</b>"
+            )
+
+    lines.append(f"\n• <b>Ăn thua độ này (phía Master/Cổ đông):</b> {fmt_signed(house_net)}")
+    summary_text = "\n".join(lines)
+    db.insert_settled_do(do_name, result, summary_text, day_key, time_str)
+    return summary_text
 
 
 def build_live_report_text() -> str:
@@ -369,11 +419,21 @@ def build_live_report_text() -> str:
 
 def build_pnl_report_text() -> str:
     now_str = datetime.now().strftime("%H:%M - %d/%m/%Y")
+    day_key = datetime.now().strftime("%Y-%m-%d")
+    settled_rows = db.get_settled_dos_by_day(day_key)
     users = db.get_all_users()
     realized = db.get_realized_profit()
     total_debt = sum(float(u["debt"]) for u in users)
 
-    lines = [f"<b>BÁO CÁO ĂN THUA (TÍNH TỚI {now_str})</b>\n", "<b>Tình hình ăn thua của khách:</b>"]
+    lines = [f"<b>BÁO CÁO ĂN THUA TỪNG ĐỘ & TỚI HIỆN TẠI ({now_str})</b>\n"]
+
+    if settled_rows:
+        lines.append("<b>Các độ đã chốt hôm nay:</b>")
+        for r in settled_rows[-5:]:
+            lines.append(f"• <b>{r['do_name']}</b> — KQ: <b>{r['result']}</b> (<code>{r['settled_at']}</code>)")
+        lines.append("")
+
+    lines.append("<b>Ăn thua lũy kế của khách:</b>")
     for u in users:
         lines.append(
             f"• <b>{u['name']}</b> (<code>{u['user_id']}</code>): {fmt_signed(float(u['pnl_net']))} | "
@@ -385,3 +445,49 @@ def build_pnl_report_text() -> str:
     lines.append(f"• Lợi nhuận thực thu: {fmt_signed(realized)}")
     lines.append(f"• Công nợ treo cộng dồn: 🔴 <b>-{fmt_num(total_debt)}</b>")
     return "\n".join(lines)
+
+
+def build_daily_report_text(day_key: str | None = None) -> str:
+    target_day = day_key or datetime.now().strftime("%Y-%m-%d")
+    now_str = datetime.now().strftime("%H:%M - %d/%m/%Y")
+    rows = db.get_settled_dos_by_day(target_day)
+    users = db.get_all_users()
+    realized = db.get_realized_profit()
+    total_debt = sum(float(u["debt"]) for u in users)
+    total_user_pnl = sum(float(u["pnl_net"]) for u in users)
+    house_pnl = -total_user_pnl
+
+    lines = [
+        f"<b>📊 BÁO CÁO ĂN THUA CẢ NGÀY ({target_day})</b>",
+        f"<i>Cập nhật lúc: {now_str} | Số độ đã chốt: <b>{len(rows)}</b></i>\n",
+    ]
+
+    if rows:
+        lines.append("<b>Danh sách các độ đã chốt trong ngày:</b>")
+        for r in rows:
+            lines.append(f"• <b>{r['do_name']}</b> — KQ: <b>{r['result']}</b> (<code>{r['settled_at']}</code>)")
+        lines.append("")
+
+    lines.append("<b>Tổng ăn thua cả ngày từng khách:</b>")
+    for u in users:
+        lines.append(
+            f"• <b>{u['name']}</b> (<code>{u['user_id']}</code>): {fmt_signed(float(u['pnl_net']))} | "
+            f"Ví: <b>{fmt_num(float(u['balance']))}</b> | "
+            f"Nợ: <b>{fmt_num(float(u['debt']))}/{fmt_num(float(u['debt_limit']))}</b>"
+        )
+
+    lines.append("\n<b>Tổng kết cả ngày:</b>")
+    lines.append(f"• Ăn/thua ròng cả ngày (Master/Cổ đông): {fmt_signed(house_pnl)}")
+    lines.append(f"• Lợi nhuận thực thu: {fmt_signed(realized)}")
+    lines.append(f"• Công nợ treo cộng dồn: 🔴 <b>-{fmt_num(total_debt)}</b>")
+    return "\n".join(lines)
+
+
+def close_day_accounting_logic(day_key: str | None = None) -> str:
+    target_day = day_key or datetime.now().strftime("%Y-%m-%d")
+    report_snapshot = build_daily_report_text(target_day)
+    with db.get_conn() as conn:
+        conn.execute("UPDATE users SET pnl_net = 0.0")
+        conn.commit()
+    db.clear_settled_dos_by_day(target_day)
+    return report_snapshot
