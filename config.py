@@ -1,0 +1,37 @@
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8385677064:AAFHuHhOd4Hjxdg8fjR2dGX3KQXvp0SwRlA")
+
+# 3 nhóm vận hành chuyên biệt + 1 kênh chính
+MASTER_GROUP_ID = int(os.getenv("MASTER_GROUP_ID", "-1004343434771"))
+PRICE_GROUP_ID = int(os.getenv("PRICE_GROUP_ID", "-1004439749096"))
+BILL_GROUP_ID = int(os.getenv("BILL_GROUP_ID", "-1004286708283"))
+MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID", "-1004444444444"))
+
+
+def _parse_ids(env_name: str, default_str: str) -> set[int]:
+    raw = os.getenv(env_name, default_str)
+    return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
+
+
+# Master/Super có đầy đủ quyền báo cáo, cấp hạn mức nợ, thu/xóa nợ, chỉ định duyệt & mọi quyền vận hành
+MASTER_IDS = _parse_ids("MASTER_IDS", "7709258303")
+# Nhân viên trực vận hành (duyệt nạp/rút, đổi giá, chốt độ)
+STAFF_IDS = _parse_ids("STAFF_IDS", "7709258303")
+ADMIN_IDS = MASTER_IDS | STAFF_IDS
+
+BANK_INFO = {
+    "bank": os.getenv("BANK_NAME", "TECHCOMBANK"),
+    "stk": os.getenv("BANK_STK", "2348312936"),
+    "owner": os.getenv("BANK_OWNER", "LE DINH HOANG"),
+    "qr_url": os.getenv(
+        "BANK_QR_URL",
+        "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=NAP_USER",
+    ),
+}
+
+QUICK_BET_AMOUNTS = [500, 1000, 2000, 5000, 10000]
+QUICK_WITHDRAW_AMOUNTS = [1000, 5000, 10000, 20000, 50000]
+FEE_RATE = 0.05  # Trừ 5% phế trên phần tiền lời
+DB_PATH = os.getenv("DB_PATH", "bot_ga_don.db")
+PORT = int(os.getenv("PORT", "10000"))
