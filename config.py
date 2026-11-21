@@ -14,7 +14,7 @@ def _parse_ids(env_name: str, default_str: str) -> set[int]:
     return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
 
 
-# Master/Super có đầy đủ quyền báo cáo, cấp hạn mức nợ, thu/xóa nợ, chỉ định duyệt & mọi quyền vận hành
+# Master có toàn quyền báo cáo, cấp hạn mức nợ, thu/xóa nợ, chỉ định duyệt & vận hành
 MASTER_IDS = _parse_ids("MASTER_IDS", "7709258303")
 # Nhân viên trực vận hành (duyệt nạp/rút, đổi giá, chốt độ)
 STAFF_IDS = _parse_ids("STAFF_IDS", "7709258303")
@@ -27,7 +27,7 @@ BANK_INFO = {
     "owner": os.getenv("BANK_OWNER", "LE DINH HOANG"),
 }
 
-# Các mức nạp nhanh trước khi sinh mã VietQR (chỉnh theo đơn vị thực tế của bạn)
+# Mức tiền nạp nhanh trước khi sinh VietQR (chỉnh theo đơn vị thực tế của bạn)
 QUICK_DEPOSIT_AMOUNTS = [5000, 10000, 20000, 50000, 100000]
 QR_AMOUNT_MULTIPLIER = int(os.getenv("QR_AMOUNT_MULTIPLIER", "1"))
 
