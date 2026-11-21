@@ -1,0 +1,270 @@
+import sqlite3
+from config import DB_PATH
+
+
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                username TEXT DEFAULT '',
+                balance REAL DEFAULT 0.0,
+                debt REAL DEFAULT 0.0,
+                debt_limit REAL DEFAULT 0.0,
+                pnl_net REAL DEFAULT 0.0,
+                last_payout_info TEXT DEFAULT ''
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS current_do (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                xanh_win REAL DEFAULT 10.0,
+                xanh_lose REAL DEFAULT 10.0,
+                do_win REAL DEFAULT 10.0,
+                do_lose REAL DEFAULT 10.0,
+                bet_seq INTEGER DEFAULT 1
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                do_name TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                side TEXT NOT NULL,
+                amount REAL NOT NULL,
+                win_net REAL NOT NULL,
+                lose_amount REAL NOT NULL,
+                price_str TEXT NOT NULL,
+                status TEXT DEFAULT 'ACTIVE'
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                payout_text TEXT DEFAULT '',
+                qr_file_id TEXT DEFAULT '',
+                assigned_staff_id INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'PENDING',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                val_text TEXT DEFAULT ''
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS system_meta (
+                key TEXT PRIMARY KEY,
+                val_real REAL DEFAULT 0.0
+            )
+        """)
+
+        cur.execute("""
+            INSERT OR IGNORE INTO current_do (id, name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
+            VALUES (1, 'Độ 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
+        """)
+
+        cur.execute("""
+            INSERT OR IGNORE INTO settings (key, val_text)
+            VALUES ('assigned_approver_id', '0')
+        """)
+
+        cur.execute("""
+            INSERT OR IGNORE INTO system_meta (key, val_real)
+            VALUES ('realized_profit', 0.0)
+        """)
+
+        conn.commit()
+
+
+def set_setting(key: str, val_text: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO settings (key, val_text) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET val_text = excluded.val_text
+            """,
+            (key, val_text),
+        )
+        conn.commit()
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_conn() as conn:
+        row = conn.execute("SELECT val_text FROM settings WHERE key = ?", (key,)).fetchone()
+        return str(row["val_text"]) if row and row["val_text"] is not None else default
+
+
+def get_user(user_id: int, first_name: str = "Khách", username: str = "") -> dict:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+
+        if not row:
+            safe_name = first_name or f"User_{user_id}"
+            cur.execute(
+                """
+                INSERT INTO users (user_id, name, username, balance, debt, debt_limit, pnl_net, last_payout_info)
+                VALUES (?, ?, ?, 0.0, 0.0, 0.0, 0.0, '')
+                """,
+                (user_id, safe_name, username or ""),
+            )
+            conn.commit()
+            cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+            row = cur.fetchone()
+        else:
+            new_name = first_name if first_name else row["name"]
+            new_user = username if username else row["username"]
+            if new_name != row["name"] or new_user != row["username"]:
+                cur.execute(
+                    "UPDATE users SET name = ?, username = ? WHERE user_id = ?",
+                    (new_name, new_user, user_id),
+                )
+                conn.commit()
+                cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+                row = cur.fetchone()
+
+        return dict(row)
+
+
+def get_all_users() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM users ORDER BY user_id ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_user_fields(user_id: int, **kwargs) -> None:
+    if not kwargs:
+        return
+    cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
+    vals = list(kwargs.values()) + [user_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE users SET {cols} WHERE user_id = ?", vals)
+        conn.commit()
+
+
+def get_current_do() -> dict:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM current_do WHERE id = 1").fetchone()
+        return dict(row)
+
+
+def update_current_do(**kwargs) -> None:
+    if not kwargs:
+        return
+    cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
+    vals = list(kwargs.values())
+    with get_conn() as conn:
+        conn.execute(f"UPDATE current_do SET {cols} WHERE id = 1", vals)
+        conn.commit()
+
+
+def add_bet_record(code: str, do_name: str, user_id: int, side: str, amount: float,
+                   win_net: float, lose_amount: float, price_str: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO bets (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+            """,
+            (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
+        )
+        conn.commit()
+
+
+def get_active_bets(do_name: str | None = None, user_id: int | None = None) -> list[dict]:
+    query = "SELECT * FROM bets WHERE status = 'ACTIVE'"
+    params: list = []
+    if do_name:
+        query += " AND do_name = ?"
+        params.append(do_name)
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY id ASC"
+
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_bets_status_by_do(do_name: str, status: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE bets SET status = ? WHERE do_name = ? AND status = 'ACTIVE'",
+            (status, do_name),
+        )
+        conn.commit()
+
+
+def update_bet_status(bet_id: int, status: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE bets SET status = ? WHERE id = ?", (status, bet_id))
+        conn.commit()
+
+
+def create_withdrawal(user_id: int, amount: float, payout_text: str,
+                      qr_file_id: str, assigned_staff_id: int, created_at: str) -> int:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO withdrawals (user_id, amount, payout_text, qr_file_id, assigned_staff_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+            """,
+            (user_id, amount, payout_text, qr_file_id, assigned_staff_id, created_at),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def get_withdrawal(w_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM withdrawals WHERE id = ?", (w_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_withdrawal(w_id: int, **kwargs) -> None:
+    if not kwargs:
+        return
+    cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
+    vals = list(kwargs.values()) + [w_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE withdrawals SET {cols} WHERE id = ?", vals)
+        conn.commit()
+
+
+def get_realized_profit() -> float:
+    with get_conn() as conn:
+        row = conn.execute("SELECT val_real FROM system_meta WHERE key = 'realized_profit'").fetchone()
+        return float(row["val_real"]) if row else 0.0
+
+
+def add_realized_profit(delta: float) -> float:
+    current = get_realized_profit() + delta
+    with get_conn() as conn:
+        conn.execute("UPDATE system_meta SET val_real = ? WHERE key = 'realized_profit'", (current,))
+        conn.commit()
+    return current
