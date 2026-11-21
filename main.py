@@ -28,6 +28,7 @@ from logic import (
     set_assigned_approver_id,
     can_approve_item,
     parse_price_input,
+    parse_single_side_ratio,
     place_bet_logic,
     apply_deposit_logic,
     create_withdrawal_logic,
@@ -238,6 +239,15 @@ def kb_price_do_picker() -> types.InlineKeyboardMarkup:
             )
         )
     kb.add(types.InlineKeyboardButton("🌐 Đổi chung tất cả độ mở", callback_data="a_pdo_all"))
+    return kb
+
+
+def kb_price_side_picker(do_target: str) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🟢 Chọn cửa XANH", callback_data=f"a_pside_XANH_{do_target}"),
+        types.InlineKeyboardButton("🔴 Chọn cửa ĐỎ", callback_data=f"a_pside_DO_{do_target}"),
+    )
     return kb
 
 
@@ -639,13 +649,13 @@ def on_callback(call: types.CallbackQuery):
         cur_open = db.get_open_dos()
         if len(cur_open) == 1:
             d0 = cur_open[0]
-            PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE", "target_do_ids": [int(d0["id"])], "target_label": d0["name"]}
             bot.send_message(
                 chat_id,
                 f"<b>ĐỔI GIÁ {d0['name']}</b>\n"
                 f"Hiện tại: XANH <code>{float(d0['xanh_win']):g}/{float(d0['xanh_lose']):g}</code> | "
                 f"ĐỎ <code>{float(d0['do_win']):g}/{float(d0['do_lose']):g}</code>\n\n"
-                f"Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>):",
+                f"Chọn 1 cửa để nhập tỷ lệ (cửa còn lại tự động đảo chiều):",
+                reply_markup=kb_price_side_picker(str(d0["id"])),
             )
         else:
             bot.send_message(
@@ -655,27 +665,46 @@ def on_callback(call: types.CallbackQuery):
             )
 
     elif data.startswith("a_pdo_one_"):
-        d_id = int(data.split("_")[3])
-        d_obj = db.get_do_by_id(d_id)
+        d_id = data.split("_")[3]
+        d_obj = db.get_do_by_id(int(d_id))
         if not d_obj:
             bot.send_message(chat_id, "Không tìm thấy độ.")
             return
-        PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE", "target_do_ids": [d_id], "target_label": d_obj["name"]}
         bot.send_message(
             chat_id,
-            f"<b>ĐỔI GIÁ {d_obj['name']}</b>\n"
-            f"Hiện tại: XANH <code>{float(d_obj['xanh_win']):g}/{float(d_obj['xanh_lose']):g}</code> | "
-            f"ĐỎ <code>{float(d_obj['do_win']):g}/{float(d_obj['do_lose']):g}</code>\n\n"
-            f"Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>):",
+            f"<b>ĐỔI GIÁ {d_obj['name']}</b> — Chọn 1 cửa (cửa còn lại tự đảo):",
+            reply_markup=kb_price_side_picker(d_id),
         )
 
     elif data == "a_pdo_all":
-        all_ids = [int(d["id"]) for d in db.get_open_dos()]
-        PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE", "target_do_ids": all_ids, "target_label": "Tất cả độ mở"}
         bot.send_message(
             chat_id,
-            f"<b>ĐỔI GIÁ CHUNG TẤT CẢ ĐỘ MỞ ({len(all_ids)} độ)</b>\n"
-            f"Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>):",
+            "<b>ĐỔI GIÁ CHUNG TẤT CẢ ĐỘ MỞ</b> — Chọn 1 cửa (cửa còn lại tự đảo):",
+            reply_markup=kb_price_side_picker("ALL"),
+        )
+
+    elif data.startswith("a_pside_"):
+        _, _, chosen_side, do_target = data.split("_")
+        if do_target == "ALL":
+            target_ids = [int(d["id"]) for d in db.get_open_dos()]
+            target_label = "Tất cả độ mở"
+        else:
+            d_obj = db.get_do_by_id(int(do_target))
+            target_ids = [int(do_target)]
+            target_label = d_obj["name"] if d_obj else "Độ hiện tại"
+
+        PENDING_STATE[uid] = {
+            "action": "ADMIN_SET_PRICE_ONE_SIDE",
+            "side": chosen_side,
+            "target_do_ids": target_ids,
+            "target_label": target_label,
+        }
+        side_name = "🟢 XANH" if chosen_side == "XANH" else "🔴 ĐỎ"
+        opp_name = "🔴 ĐỎ" if chosen_side == "XANH" else "🟢 XANH"
+        bot.send_message(
+            chat_id,
+            f"Nhập tỷ lệ cho cửa <b>{side_name}</b> của <b>{target_label}</b>\n"
+            f"<i>Ví dụ nhập <code>5/10</code> -> {side_name} là <b>5/10</b>, {opp_name} tự đảo thành <b>10/5</b>:</i>",
         )
 
     elif data == "a_multi_close_open":
@@ -746,7 +775,6 @@ def on_callback(call: types.CallbackQuery):
             lines.append(f"\n📌 Độ đang mở hiện tại: <b>{', '.join(out['open_dos'])}</b>")
             bot.send_message(target_out_chat, "\n".join(lines), reply_markup=panel_out)
 
-        # Gửi báo cáo ăn thua từng độ vào nhóm Master
         if MASTER_GROUP_ID:
             for d_name in out["do_names"]:
                 per_do_txt = record_and_format_per_do_report(d_name, result, out["per_do_net"].get(d_name, {}))
@@ -1072,6 +1100,29 @@ def on_text(message: types.Message):
                     MAIN_CHANNEL_ID,
                     f"<b>THÔNG BÁO NẠP ĐIỂM</b>\n"
                     f"Tài khoản ID <code>{target_uid}</code> vừa được nạp thành công <b>+{fmt_num(amt)}</b>.",
+                )
+
+        elif act == "ADMIN_SET_PRICE_ONE_SIDE":
+            try:
+                updates = parse_single_side_ratio(txt, state["side"])
+                target_ids = list(state.get("target_do_ids") or [])
+                target_label = state.get("target_label") or "Độ hiện tại"
+                for d_id in target_ids:
+                    db.update_do(int(d_id), **updates)
+
+                first_do = db.get_do_by_id(int(target_ids[0])) if target_ids else db.get_open_dos()[0]
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ Đã cập nhật giá cho <b>{target_label}</b>:\n"
+                    f"• XANH: <b>{float(first_do['xanh_win']):g}/{float(first_do['xanh_lose']):g}</b>\n"
+                    f"• ĐỎ: <b>{float(first_do['do_win']):g}/{float(first_do['do_lose']):g}</b>",
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
+                )
+            except Exception:
+                bot.send_message(
+                    message.chat.id,
+                    "Sai định dạng. Chỉ cần nhập tỷ lệ dạng <code>5/10</code> (ví dụ <code>5/10</code> hoặc <code>2/10</code>).",
+                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
                 )
 
         elif act == "ADMIN_SET_PRICE":
