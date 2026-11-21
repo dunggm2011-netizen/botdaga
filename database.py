@@ -67,6 +67,17 @@ def init_db() -> None:
         """)
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS settled_dos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                do_name TEXT NOT NULL,
+                result TEXT NOT NULL,
+                summary_text TEXT NOT NULL,
+                day_key TEXT NOT NULL,
+                settled_at TEXT NOT NULL
+            )
+        """)
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 val_text TEXT DEFAULT ''
@@ -309,6 +320,33 @@ def update_withdrawal(w_id: int, **kwargs) -> None:
     vals = list(kwargs.values()) + [w_id]
     with get_conn() as conn:
         conn.execute(f"UPDATE withdrawals SET {cols} WHERE id = ?", vals)
+        conn.commit()
+
+
+def insert_settled_do(do_name: str, result: str, summary_text: str, day_key: str, settled_at: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO settled_dos (do_name, result, summary_text, day_key, settled_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (do_name, result, summary_text, day_key, settled_at),
+        )
+        conn.commit()
+
+
+def get_settled_dos_by_day(day_key: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM settled_dos WHERE day_key = ? ORDER BY id ASC",
+            (day_key,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def clear_settled_dos_by_day(day_key: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM settled_dos WHERE day_key = ?", (day_key,))
         conn.commit()
 
 
