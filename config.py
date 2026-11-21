@@ -22,13 +22,14 @@ ADMIN_IDS = MASTER_IDS | STAFF_IDS
 
 BANK_INFO = {
     "bank": os.getenv("BANK_NAME", "TECHCOMBANK"),
+    "bank_bin": os.getenv("BANK_BIN", "970407"),
     "stk": os.getenv("BANK_STK", "2348312936"),
     "owner": os.getenv("BANK_OWNER", "LE DINH HOANG"),
-    "qr_url": os.getenv(
-        "BANK_QR_URL",
-        "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=NAP_USER",
-    ),
 }
+
+# Các mức nạp nhanh trước khi sinh mã VietQR (chỉnh theo đơn vị thực tế của bạn)
+QUICK_DEPOSIT_AMOUNTS = [5000, 10000, 20000, 50000, 100000]
+QR_AMOUNT_MULTIPLIER = int(os.getenv("QR_AMOUNT_MULTIPLIER", "1"))
 
 QUICK_BET_AMOUNTS = [500, 1000, 2000, 5000, 10000]
 QUICK_WITHDRAW_AMOUNTS = [1000, 5000, 10000, 20000, 50000]
