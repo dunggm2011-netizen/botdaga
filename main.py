@@ -27,12 +27,13 @@ from logic import (
     get_assigned_approver_id,
     set_assigned_approver_id,
     can_approve_item,
+    parse_price_input,
     place_bet_logic,
     apply_deposit_logic,
     create_withdrawal_logic,
     confirm_withdrawal_logic,
     reject_withdrawal_logic,
-    settle_do_logic,
+    settle_multiple_dos_logic,
     build_live_report_text,
     build_pnl_report_text,
 )
@@ -41,7 +42,6 @@ db.init_db()
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 PENDING_STATE: dict[int, dict] = {}
 
-# ==================== WEB SERVER CHO RENDER ====================
 app = Flask(__name__)
 
 
@@ -87,6 +87,16 @@ def kb_user_main(user_id: int) -> types.InlineKeyboardMarkup:
     return kb
 
 
+def kb_user_do_picker(side: str) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for d in db.get_open_dos():
+        d_id = int(d["id"])
+        price_lbl = f"{float(d['xanh_win']):g}/{float(d['xanh_lose']):g}" if side == "XANH" else f"{float(d['do_win']):g}/{float(d['do_lose']):g}"
+        kb.add(types.InlineKeyboardButton(f"{d['name']} ({price_lbl})", callback_data=f"u_pickdo_{side}_{d_id}"))
+    kb.add(types.InlineKeyboardButton("🔙 Quay lại", callback_data="u_back"))
+    return kb
+
+
 def kb_deposit_amounts() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=3)
     btns = [
@@ -110,15 +120,15 @@ def kb_user_deposit() -> types.InlineKeyboardMarkup:
     return kb
 
 
-def kb_user_amounts(side: str) -> types.InlineKeyboardMarkup:
+def kb_user_amounts(side: str, do_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=3)
     btns = [
-        types.InlineKeyboardButton(fmt_num(amt), callback_data=f"u_bet_{side}_{amt}")
+        types.InlineKeyboardButton(fmt_num(amt), callback_data=f"u_bet_{side}_{do_id}_{amt}")
         for amt in QUICK_BET_AMOUNTS
     ]
     kb.add(*btns)
     kb.add(
-        types.InlineKeyboardButton("✏️ Nhập số khác", callback_data=f"u_custom_{side}"),
+        types.InlineKeyboardButton("✏️ Nhập số khác", callback_data=f"u_custom_{side}_{do_id}"),
         types.InlineKeyboardButton("🔙 Quay lại", callback_data="u_back"),
     )
     return kb
@@ -155,9 +165,10 @@ def kb_master_panel() -> types.InlineKeyboardMarkup:
 def kb_price_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
+        types.InlineKeyboardButton("➕ Mở độ mới", callback_data="a_new_do"),
         types.InlineKeyboardButton("✏️ Đổi giá độ", callback_data="a_set_price"),
-        types.InlineKeyboardButton("🏁 Chốt độ", callback_data="a_close_menu"),
     )
+    kb.add(types.InlineKeyboardButton("🏁 Chốt độ / Nhiều độ", callback_data="a_multi_close_open"))
     return kb
 
 
@@ -174,9 +185,10 @@ def kb_full_admin_panel() -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton("📈 Ăn thua tới hiện tại", callback_data="a_rep_pnl"),
     )
     kb.add(
+        types.InlineKeyboardButton("➕ Mở độ mới", callback_data="a_new_do"),
         types.InlineKeyboardButton("✏️ Đổi giá độ", callback_data="a_set_price"),
-        types.InlineKeyboardButton("🏁 Chốt độ", callback_data="a_close_menu"),
     )
+    kb.add(types.InlineKeyboardButton("🏁 Chốt độ / Nhiều độ", callback_data="a_multi_close_open"))
     kb.add(
         types.InlineKeyboardButton("💳 Cấp hạn mức nợ", callback_data="a_set_debt_limit"),
         types.InlineKeyboardButton("💵 Thu nợ / Xóa nợ", callback_data="a_debt_menu"),
@@ -185,13 +197,40 @@ def kb_full_admin_panel() -> types.InlineKeyboardMarkup:
     return kb
 
 
-def kb_close_results() -> types.InlineKeyboardMarkup:
+def kb_price_do_picker() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
+    for d in db.get_open_dos():
+        d_id = int(d["id"])
+        kb.add(
+            types.InlineKeyboardButton(
+                f"{d['name']} ({float(d['xanh_win']):g}/{float(d['xanh_lose']):g})",
+                callback_data=f"a_pdo_one_{d_id}",
+            )
+        )
+    kb.add(types.InlineKeyboardButton("🌐 Đổi chung tất cả độ mở", callback_data="a_pdo_all"))
+    return kb
+
+
+def kb_multi_close_picker(selected_ids: set[int]) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for d in db.get_open_dos():
+        d_id = int(d["id"])
+        mark = "✅" if d_id in selected_ids else "⬜"
+        kb.add(
+            types.InlineKeyboardButton(
+                f"{mark} {d['name']} ({float(d['xanh_win']):g}/{float(d['xanh_lose']):g})",
+                callback_data=f"a_mclose_toggle_{d_id}",
+            )
+        )
     kb.add(
-        types.InlineKeyboardButton("🟢 XANH thắng", callback_data="a_res_XANH"),
-        types.InlineKeyboardButton("🔴 ĐỎ thắng", callback_data="a_res_DO"),
-        types.InlineKeyboardButton("🤝 Hòa", callback_data="a_res_DRAW"),
-        types.InlineKeyboardButton("🚫 Hủy độ", callback_data="a_res_CANCEL"),
+        types.InlineKeyboardButton("⚡ Chọn tất cả", callback_data="a_mclose_all"),
+        types.InlineKeyboardButton("🗑️ Bỏ chọn", callback_data="a_mclose_clear"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("🟢 XANH thắng", callback_data="a_mclose_run_XANH"),
+        types.InlineKeyboardButton("🔴 ĐỎ thắng", callback_data="a_mclose_run_DO"),
+        types.InlineKeyboardButton("🤝 Hòa", callback_data="a_mclose_run_DRAW"),
+        types.InlineKeyboardButton("🚫 Hủy độ", callback_data="a_mclose_run_CANCEL"),
     )
     return kb
 
@@ -244,6 +283,23 @@ def get_panel_by_chat(chat_id: int, chat_type: str) -> types.InlineKeyboardMarku
     if chat_id == BILL_GROUP_ID:
         return kb_bill_panel()
     return kb_full_admin_panel()
+
+
+def open_bet_amount_menu(chat_id: int, uid: int, u: dict, side: str, do_id: int) -> None:
+    do = db.get_do_by_id(do_id)
+    if not do or do["status"] != "OPEN":
+        bot.send_message(chat_id, "Độ này đã đóng hoặc không tồn tại.", reply_markup=kb_user_main(uid))
+        return
+    win_u = float(do["xanh_win"] if side == "XANH" else do["do_win"])
+    lose_u = float(do["xanh_lose"] if side == "XANH" else do["do_lose"])
+    side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
+    txt = (
+        f"<b>{do['name']} — CỬA {side_label}</b>\n"
+        f"• Giá hiện tại: <b>{win_u:g}/{lose_u:g}</b> <i>(trừ 5% phế trên tiền lời)</i>\n"
+        f"• Ví: <b>{fmt_num(float(u['balance']))}</b> | Nợ: <b>{fmt_num(float(u['debt']))}/{fmt_num(float(u['debt_limit']))}</b>\n\n"
+        f"Chọn mức tiền nhanh hoặc bấm <b>Nhập số khác</b>:"
+    )
+    bot.send_message(chat_id, txt, reply_markup=kb_user_amounts(side, do_id))
 
 
 def send_deposit_qr(chat_id: int, user_id: int, amount: float) -> None:
@@ -330,7 +386,7 @@ def on_callback(call: types.CallbackQuery):
     chat_id = call.message.chat.id
     chat_type = call.message.chat.type
     u = db.get_user(uid, call.from_user.first_name, call.from_user.username)
-    do = db.get_current_do()
+    open_dos = db.get_open_dos()
 
     # --- USER ACTIONS ---
     if data == "u_back":
@@ -342,16 +398,18 @@ def on_callback(call: types.CallbackQuery):
         )
 
     elif data == "u_wallet":
-        active_bets = db.get_active_bets(do_name=do["name"], user_id=uid)
+        active_bets = []
+        for d in open_dos:
+            active_bets.extend(db.get_active_bets(do_name=d["name"], user_id=uid))
         bets_txt = "\n".join(
-            [f"  • {b['code']} | {b['side']} | {fmt_num(float(b['amount']))} (giá {b['price_str']})" for b in active_bets]
+            [f"  • {b['do_name']} | {b['code']} | {b['side']} | {fmt_num(float(b['amount']))} (giá {b['price_str']})" for b in active_bets]
         ) or "  <i>Chưa có mã nào đang chạy.</i>"
         txt = (
             f"<b>TÀI KHOẢN CỦA BẠN</b> (ID: <code>{uid}</code>)\n"
             f"• Số dư ví: <b>{fmt_num(float(u['balance']))}</b>\n"
             f"• Đang ghi nợ: <b>{fmt_num(float(u['debt']))}</b> / Hạn mức <b>{fmt_num(float(u['debt_limit']))}</b>\n"
             f"• Ăn/thua tới hiện tại: {fmt_signed(float(u['pnl_net']))}\n\n"
-            f"<b>Mã đang đánh ({do['name']}):</b>\n{bets_txt}"
+            f"<b>Mã đang đánh:</b>\n{bets_txt}"
         )
         bot.send_message(chat_id, txt, reply_markup=kb_user_main(uid))
 
@@ -442,25 +500,28 @@ def on_callback(call: types.CallbackQuery):
 
     elif data.startswith("u_side_"):
         side = data.split("_")[2]
-        win_u = float(do["xanh_win"] if side == "XANH" else do["do_win"])
-        lose_u = float(do["xanh_lose"] if side == "XANH" else do["do_lose"])
-        side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
-        txt = (
-            f"<b>{do['name']} — CỬA {side_label}</b>\n"
-            f"• Giá hiện tại: <b>{win_u:g}/{lose_u:g}</b> <i>(trừ 5% phế trên tiền lời)</i>\n"
-            f"• Ví: <b>{fmt_num(float(u['balance']))}</b> | Nợ: <b>{fmt_num(float(u['debt']))}/{fmt_num(float(u['debt_limit']))}</b>\n\n"
-            f"Chọn mức tiền nhanh hoặc bấm <b>Nhập số khác</b>:"
-        )
-        bot.send_message(chat_id, txt, reply_markup=kb_user_amounts(side))
+        if len(open_dos) > 1:
+            side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
+            bot.send_message(
+                chat_id,
+                f"Đang có <b>{len(open_dos)} độ mở</b>. Chọn độ bạn muốn đánh cửa <b>{side_label}</b>:",
+                reply_markup=kb_user_do_picker(side),
+            )
+        else:
+            open_bet_amount_menu(chat_id, uid, u, side, int(open_dos[0]["id"]))
+
+    elif data.startswith("u_pickdo_"):
+        _, _, side, do_id_s = data.split("_")
+        open_bet_amount_menu(chat_id, uid, u, side, int(do_id_s))
 
     elif data.startswith("u_bet_"):
-        _, _, side, amt_str = data.split("_")
-        _, res_msg = place_bet_logic(uid, float(amt_str), side)
+        _, _, side, do_id_s, amt_str = data.split("_")
+        _, res_msg = place_bet_logic(uid, float(amt_str), side, do_id=int(do_id_s))
         bot.send_message(chat_id, res_msg, reply_markup=kb_user_main(uid))
 
     elif data.startswith("u_custom_"):
-        side = data.split("_")[2]
-        PENDING_STATE[uid] = {"action": "USER_BET_AMOUNT", "side": side}
+        _, _, side, do_id_s = data.split("_")
+        PENDING_STATE[uid] = {"action": "USER_BET_AMOUNT", "side": side, "do_id": int(do_id_s)}
         bot.send_message(chat_id, f"Nhập số tiền bạn muốn đánh cửa <b>{side}</b>:")
 
     # --- ADMIN / MASTER / STAFF ACTIONS ---
@@ -470,6 +531,126 @@ def on_callback(call: types.CallbackQuery):
 
     elif data == "a_panel_open":
         bot.send_message(chat_id, "<b>MENU ADMIN (CHAT RIÊNG)</b>", reply_markup=kb_full_admin_panel())
+
+    elif data == "a_new_do":
+        created = db.create_new_do()
+        bot.send_message(
+            chat_id,
+            f"✅ Đã mở thêm <b>{created['name']}</b> (XANH <code>{float(created['xanh_win']):g}/{float(created['xanh_lose']):g}</code> | "
+            f"ĐỎ <code>{float(created['do_win']):g}/{float(created['do_lose']):g}</code>).",
+            reply_markup=get_panel_by_chat(chat_id, chat_type),
+        )
+
+    elif data == "a_set_price":
+        cur_open = db.get_open_dos()
+        if len(cur_open) == 1:
+            d0 = cur_open[0]
+            PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE", "target_do_ids": [int(d0["id"])], "target_label": d0["name"]}
+            bot.send_message(
+                chat_id,
+                f"<b>ĐỔI GIÁ {d0['name']}</b>\n"
+                f"Hiện tại: XANH <code>{float(d0['xanh_win']):g}/{float(d0['xanh_lose']):g}</code> | "
+                f"ĐỎ <code>{float(d0['do_win']):g}/{float(d0['do_lose']):g}</code>\n\n"
+                f"Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>):",
+            )
+        else:
+            bot.send_message(
+                chat_id,
+                "Chọn độ cần đổi giá hoặc đổi chung tất cả độ đang mở:",
+                reply_markup=kb_price_do_picker(),
+            )
+
+    elif data.startswith("a_pdo_one_"):
+        d_id = int(data.split("_")[3])
+        d_obj = db.get_do_by_id(d_id)
+        if not d_obj:
+            bot.send_message(chat_id, "Không tìm thấy độ.")
+            return
+        PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE", "target_do_ids": [d_id], "target_label": d_obj["name"]}
+        bot.send_message(
+            chat_id,
+            f"<b>ĐỔI GIÁ {d_obj['name']}</b>\n"
+            f"Hiện tại: XANH <code>{float(d_obj['xanh_win']):g}/{float(d_obj['xanh_lose']):g}</code> | "
+            f"ĐỎ <code>{float(d_obj['do_win']):g}/{float(d_obj['do_lose']):g}</code>\n\n"
+            f"Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>):",
+        )
+
+    elif data == "a_pdo_all":
+        all_ids = [int(d["id"]) for d in db.get_open_dos()]
+        PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE", "target_do_ids": all_ids, "target_label": "Tất cả độ mở"}
+        bot.send_message(
+            chat_id,
+            f"<b>ĐỔI GIÁ CHUNG TẤT CẢ ĐỘ MỞ ({len(all_ids)} độ)</b>\n"
+            f"Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>):",
+        )
+
+    elif data == "a_multi_close_open":
+        cur_open = db.get_open_dos()
+        default_sel = {int(cur_open[0]["id"])} if len(cur_open) == 1 else set()
+        PENDING_STATE[uid] = {"action": "ADMIN_MULTI_CLOSE", "selected_ids": default_sel}
+        bot.send_message(
+            chat_id,
+            "<b>CHỐT ĐỘ / CHỐT NHIỀU ĐỘ CÙNG LÚC</b>\n"
+            "Bấm chọn 1 hoặc nhiều độ, sau đó bấm nút kết quả bên dưới:",
+            reply_markup=kb_multi_close_picker(default_sel),
+        )
+
+    elif data.startswith("a_mclose_toggle_"):
+        d_id = int(data.split("_")[3])
+        st = PENDING_STATE.setdefault(uid, {"action": "ADMIN_MULTI_CLOSE", "selected_ids": set()})
+        sel: set[int] = st.setdefault("selected_ids", set())
+        if d_id in sel:
+            sel.remove(d_id)
+        else:
+            sel.add(d_id)
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_multi_close_picker(sel))
+
+    elif data == "a_mclose_all":
+        sel = {int(d["id"]) for d in db.get_open_dos()}
+        PENDING_STATE[uid] = {"action": "ADMIN_MULTI_CLOSE", "selected_ids": sel}
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_multi_close_picker(sel))
+
+    elif data == "a_mclose_clear":
+        sel: set[int] = set()
+        PENDING_STATE[uid] = {"action": "ADMIN_MULTI_CLOSE", "selected_ids": sel}
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_multi_close_picker(sel))
+
+    elif data.startswith("a_mclose_run_"):
+        result = data.split("_")[3]
+        st = PENDING_STATE.get(uid) or {}
+        sel: set[int] = set(st.get("selected_ids") or set())
+        if not sel and len(db.get_open_dos()) == 1:
+            sel = {int(db.get_open_dos()[0]["id"])}
+        if not sel:
+            bot.answer_callback_query(call.id, "Hãy chọn ít nhất 1 độ trước khi chốt!", show_alert=True)
+            return
+
+        PENDING_STATE.pop(uid, None)
+        out = settle_multiple_dos_logic(list(sel), result)
+        target_out_chat = PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id
+        panel_out = get_panel_by_chat(target_out_chat, "group" if target_out_chat != uid else "private")
+        do_names_str = ", ".join(out["do_names"])
+
+        if result == "CANCEL":
+            bot.send_message(target_out_chat, f"🚫 Đã hủy <b>{do_names_str}</b>.", reply_markup=panel_out)
+        elif result == "DRAW":
+            bot.send_message(target_out_chat, f"🤝 <b>{do_names_str}</b> hòa.", reply_markup=panel_out)
+        else:
+            lines = [f"<b>TỔNG KẾT {do_names_str} — {result} THẮNG</b>"]
+            for item in out["users"]:
+                lines.append(
+                    f"• <b>{item['name']}</b> (<code>{item['user_id']}</code>): {fmt_signed(item['net'])} | "
+                    f"Ví: <b>{fmt_num(item['balance'])}</b> | Nợ: <b>{fmt_num(item['debt'])}</b>"
+                )
+                bot.send_message(
+                    item["user_id"],
+                    f"<b>KẾT QUẢ {do_names_str}: {result} THẮNG</b>\n"
+                    f"• Tổng ăn/thua của bạn: {fmt_signed(item['net'])}\n"
+                    f"• Ví: <b>{fmt_num(item['balance'])}</b> | Nợ: <b>{fmt_num(item['debt'])}</b>",
+                    reply_markup=kb_user_main(item["user_id"]),
+                )
+            lines.append(f"\n📌 Độ đang mở hiện tại: <b>{', '.join(out['open_dos'])}</b>")
+            bot.send_message(target_out_chat, "\n".join(lines), reply_markup=panel_out)
 
     elif data == "a_assign_approver":
         if not is_master(uid):
@@ -596,50 +777,6 @@ def on_callback(call: types.CallbackQuery):
                 reply_markup=kb_user_main(int(w_rec["user_id"])),
             )
 
-    elif data == "a_set_price":
-        PENDING_STATE[uid] = {"action": "ADMIN_SET_PRICE"}
-        bot.send_message(
-            chat_id,
-            f"<b>ĐỔI GIÁ {do['name']}</b>\n"
-            f"Hiện tại: XANH <code>{float(do['xanh_win']):g}/{float(do['xanh_lose']):g}</code> | "
-            f"ĐỎ <code>{float(do['do_win']):g}/{float(do['do_lose']):g}</code>\n\n"
-            f"Nhập theo mẫu: <code>XANH 10/10 | DO 10/5</code>",
-        )
-
-    elif data == "a_close_menu":
-        bot.send_message(
-            chat_id,
-            f"Chọn kết quả chốt cho <b>{do['name']}</b>:",
-            reply_markup=kb_close_results(),
-        )
-
-    elif data.startswith("a_res_"):
-        result = data.split("_")[2]
-        out = settle_do_logic(result)
-        target_out_chat = PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id
-        panel_out = get_panel_by_chat(target_out_chat, "group" if target_out_chat != uid else "private")
-
-        if out["mode"] == "CANCEL":
-            bot.send_message(target_out_chat, f"🚫 Đã hủy <b>{out['do_name']}</b>. Sang <b>{out['next_do']}</b>.", reply_markup=panel_out)
-        elif out["mode"] == "DRAW":
-            bot.send_message(target_out_chat, f"🤝 <b>{out['do_name']}</b> hòa. Sang <b>{out['next_do']}</b>.", reply_markup=panel_out)
-        else:
-            lines = [f"<b>TỔNG KẾT {out['do_name']} — {out['result']} THẮNG</b>"]
-            for item in out["users"]:
-                lines.append(
-                    f"• <b>{item['name']}</b> (<code>{item['user_id']}</code>): {fmt_signed(item['net'])} | "
-                    f"Ví: <b>{fmt_num(item['balance'])}</b> | Nợ: <b>{fmt_num(item['debt'])}</b>"
-                )
-                bot.send_message(
-                    item["user_id"],
-                    f"<b>KẾT QUẢ {out['do_name']}: {out['result']} THẮNG</b>\n"
-                    f"• Kết quả của bạn: {fmt_signed(item['net'])}\n"
-                    f"• Ví: <b>{fmt_num(item['balance'])}</b> | Nợ: <b>{fmt_num(item['debt'])}</b>",
-                    reply_markup=kb_user_main(item["user_id"]),
-                )
-            lines.append(f"\n➡️ Chuyển sang <b>{out['next_do']}</b>.")
-            bot.send_message(target_out_chat, "\n".join(lines), reply_markup=panel_out)
-
     elif data == "a_set_debt_limit":
         if not is_master(uid):
             bot.answer_callback_query(call.id, "Chỉ Master mới được cấp hạn mức nợ.", show_alert=True)
@@ -647,7 +784,7 @@ def on_callback(call: types.CallbackQuery):
         PENDING_STATE[uid] = {"action": "MASTER_SET_DEBT_LIMIT"}
         bot.send_message(
             chat_id,
-            "Nhập <code>USER_ID HẠN_MỨC_NỢ</code>\nVí dụ: <code>123456 50000</code> (nhập <code>0</code> để khóa ghi nợ).",
+            "Nhập <code>USER_ID HẠN_MỨC_NỢ</code>\nVí dụ: <code>123456 20000000</code> (nhập <code>0</code> để khóa ghi nợ).",
         )
 
     elif data == "a_debt_menu":
@@ -660,7 +797,7 @@ def on_callback(call: types.CallbackQuery):
             "<b>THU NỢ / XÓA NỢ CỘNG DỒN</b>\n"
             "• Thu tiền khách trả (tính lợi nhuận thực thu): <code>THU USER_ID SỐ_TIỀN</code>\n"
             "• Xóa nợ khi chốt mất: <code>XOA USER_ID</code>\n"
-            "Ví dụ: <code>THU 123456 25000</code>",
+            "Ví dụ: <code>THU 123456 5000000</code>",
         )
 
     elif data == "a_rep_live":
@@ -753,7 +890,7 @@ def on_text(message: types.Message):
             except ValueError:
                 bot.send_message(message.chat.id, "Vui lòng nhập số hợp lệ.", reply_markup=kb_user_main(uid))
                 return
-            _, res_msg = place_bet_logic(uid, amt, state["side"])
+            _, res_msg = place_bet_logic(uid, amt, state["side"], do_id=state.get("do_id"))
             bot.send_message(message.chat.id, res_msg, reply_markup=kb_user_main(uid))
             return
 
@@ -851,30 +988,24 @@ def on_text(message: types.Message):
 
         elif act == "ADMIN_SET_PRICE":
             try:
-                updates = {}
-                for part in [p.strip() for p in txt.split("|")]:
-                    tokens = part.upper().split()
-                    side = tokens[0]
-                    win_v, lose_v = [float(x) for x in tokens[1].split("/")]
-                    if side == "XANH":
-                        updates["xanh_win"] = win_v
-                        updates["xanh_lose"] = lose_v
-                    elif side == "DO":
-                        updates["do_win"] = win_v
-                        updates["do_lose"] = lose_v
-                db.update_current_do(**updates)
-                do_new = db.get_current_do()
+                updates = parse_price_input(txt)
+                target_ids = list(state.get("target_do_ids") or [])
+                target_label = state.get("target_label") or "Độ hiện tại"
+                for d_id in target_ids:
+                    db.update_do(int(d_id), **updates)
+
+                first_do = db.get_do_by_id(int(target_ids[0])) if target_ids else db.get_open_dos()[0]
                 bot.send_message(
                     message.chat.id,
-                    f"✅ Đã cập nhật giá <b>{do_new['name']}</b>:\n"
-                    f"• XANH: <b>{float(do_new['xanh_win']):g}/{float(do_new['xanh_lose']):g}</b>\n"
-                    f"• ĐỎ: <b>{float(do_new['do_win']):g}/{float(do_new['do_lose']):g}</b>",
+                    f"✅ Đã cập nhật giá cho <b>{target_label}</b>:\n"
+                    f"• XANH: <b>{float(first_do['xanh_win']):g}/{float(first_do['xanh_lose']):g}</b>\n"
+                    f"• ĐỎ: <b>{float(first_do['do_win']):g}/{float(first_do['do_lose']):g}</b>",
                     reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
                 )
             except Exception:
                 bot.send_message(
                     message.chat.id,
-                    "Sai định dạng. Mẫu đúng: <code>XANH 10/10 | DO 10/5</code>",
+                    "Sai định dạng. Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>).",
                     reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
                 )
 
@@ -896,7 +1027,7 @@ def on_text(message: types.Message):
             except Exception:
                 bot.send_message(
                     message.chat.id,
-                    "Sai mẫu. Ví dụ đúng: <code>123456 50000</code>",
+                    "Sai mẫu. Ví dụ đúng: <code>123456 20000000</code>",
                     reply_markup=get_panel_by_chat(message.chat.id, message.chat.type),
                 )
 
