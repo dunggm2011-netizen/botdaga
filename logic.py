@@ -131,9 +131,8 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
 
 def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: list[dict]) -> float:
     """
-    Tính phần cộng thêm từ các độ mở khác:
-    - Nếu ở một độ khác khách có lời 2 đầu (pnl_xanh > 0 và pnl_do > 0), lấy đầu thấp hơn min(pnl_xanh, pnl_do).
-    - Nếu 1 bên ăn và 1 bên hòa (0), đầu thấp hơn là 0 -> cộng 0.
+    Lấy đầu ăn ít hơn min(pnl_if_xanh, pnl_if_do) từ các độ mở khác
+    chỉ khi độ đó thực sự lời cả 2 đầu (> 0). Nếu 1 ăn 1 hòa -> 0.
     """
     bonus = 0.0
     for d in open_dos:
@@ -152,7 +151,7 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
 
         if pnl_if_xanh > 0 and pnl_if_do > 0:
             bonus += min(pnl_if_xanh, pnl_if_do)
-    return bonus
+    return max(0.0, bonus)
 
 
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
@@ -175,13 +174,18 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     for d in open_dos:
         all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
 
-    # Trừ toàn bộ vốn gốc đang dùng trên mọi độ mở (bao gồm cả độ hiện tại)
     total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
+    base_unused = max(0.0, max_capacity - total_open_principal)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"], open_dos)
 
-    unused_capital = max(0.0, max_capacity - total_open_principal) + edge_bonus
+    # Nếu các độ trước có lời 2 đầu, hạn mức khả dụng cho độ kế tiếp bị khống chế <= đầu ăn ít hơn (edge_bonus)
+    if edge_bonus > 0:
+        unused_capital = min(base_unused + edge_bonus, edge_bonus)
+    else:
+        unused_capital = base_unused
 
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
+    current_do_principal = sum(float(b["amount"]) for b in existing_bets)
     opp_side = "XANH" if side == "DO" else "DO"
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     last_side = existing_bets[-1]["side"] if existing_bets else None
@@ -210,6 +214,16 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
             f"• Đầu lời ròng cửa {opp_side} gần nhất (sau 5% phế): <b>{fmt_num(opp_streak_win_net)}</b>\n"
             f"• Hạn mức đánh qua cửa {side} hiện tại: <b>{fmt_num(opp_hedge_allow)}</b>\n"
             f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
+        )
+
+    # Nếu đang đánh ở độ kế tiếp khi có lời 2 đầu từ độ trước, khống chế tổng gốc/rủi ro của độ này <= edge_bonus
+    if edge_bonus > 0 and (current_do_principal + amount) > edge_bonus + 1e-6:
+        remain_do_cap = max(0.0, edge_bonus - current_do_principal)
+        return (
+            False,
+            f"❌ Độ kế tiếp chỉ được đánh tối đa bằng hoặc nhỏ hơn đầu ăn ít hơn của độ trước!\n"
+            f"• Đầu ăn ít hơn độ trước: <b>{fmt_num(edge_bonus)}</b>\n"
+            f"• Đã đánh ở {do['name']}: <b>{fmt_num(current_do_principal)}</b> | Còn đánh được: <b>{fmt_num(remain_do_cap)}</b>",
         )
 
     other_dos_worst_loss = sum(
