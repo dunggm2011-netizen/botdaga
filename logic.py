@@ -162,26 +162,18 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Giới hạn đánh ngược nằm trong số tiền đầu lời ròng bên kia ăn (đã trừ 5% phế) (+ vốn gốc dư nếu còn)
-    if opp_win_net > 0:
-        allowed_budget = opp_win_net + unused_capital
-        if amount > allowed_budget + 1e-6:
-            return (
-                False,
-                f"❌ Chỉ được đánh tối đa trong phần đầu lời bên kia ăn (đã trừ 5% phế)!\n"
-                f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
-                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Mức đánh tối đa cho phép mã này: <b>{fmt_num(allowed_budget)}</b>",
-            )
-    else:
-        if amount > unused_capital + 1e-6:
-            return (
-                False,
-                f"❌ Không đủ vốn/hạn mức còn lại (đã tính các độ đang mở)!\n"
-                f"• Vốn gốc đã dùng các độ mở: <b>{fmt_num(total_open_principal)} / {fmt_num(max_capacity)}</b>\n"
-                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Đã đánh cửa {side} ở {do['name']}: <b>{fmt_num(same_principal)}</b>",
-            )
+    # Phần tiền đầu bên kia ăn (đã trừ 5% phế) còn trống để đánh sang cửa `side`
+    opp_hedge_left = max(0.0, opp_win_net - same_principal)
+    allowed_budget = opp_hedge_left + unused_capital
+
+    if amount > allowed_budget + 1e-6:
+        return (
+            False,
+            f"❌ Vượt hạn mức cho phép của cửa {side} ({do['name']})!\n"
+            f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
+            f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b> -> Còn gác được: <b>{fmt_num(opp_hedge_left)}</b>\n"
+            f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
+        )
 
     # Kiểm tra rủi ro lỗ xấu nhất trên TẤT CẢ các độ mở (trần cứng tối đa = max_capacity * 2)
     other_dos_worst_loss = sum(
@@ -227,7 +219,6 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
-
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     u = db.get_user(target_uid)
     new_balance = float(u["balance"]) + amount
