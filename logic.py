@@ -132,7 +132,7 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
     u = db.get_user(user_id)
     open_dos = db.get_open_dos()
-    do = db.get_do_by_id(do_id) if do_id else open_dos[0]
+    do = db.get_do_by_id(do_id) if do_id else (open_dos[0] if open_dos else None)
 
     if not do or do["status"] != "OPEN":
         return False, "Độ đã chọn đang khóa hoặc đã chốt."
@@ -157,15 +157,13 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
     opp_side = "XANH" if side == "DO" else "DO"
     opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     last_side = existing_bets[-1]["side"] if existing_bets else None
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Khi có đầu lời ròng cửa đối diện (đã trừ 5% phế):
-    # - Nếu đang đảo chiều từ cửa kia sang `side` (last_side == opp_side): dùng được tối đa đầu lời ròng cửa `opp_side` (+ vốn gốc dư)
-    # - Nếu đánh cùng cửa liên tiếp: chỉ dùng phần dư `max(0, opp_win_net - same_principal)` (+ vốn gốc dư)
-    same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
+    # Đầu lời ròng đối ứng (đã trừ 5% phế) dùng để đánh sang cửa `side`
     if opp_win_net > 0 and last_side == opp_side:
         opp_hedge_allow = opp_win_net
     else:
