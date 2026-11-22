@@ -129,6 +129,32 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
     return max(loss_if_xanh, loss_if_do)
 
 
+def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: list[dict]) -> float:
+    """
+    Tính phần cộng thêm từ các độ mở khác:
+    - Nếu ở một độ khác khách có lời 2 đầu (pnl_xanh > 0 và pnl_do > 0), lấy đầu thấp hơn min(pnl_xanh, pnl_do).
+    - Nếu 1 bên ăn và 1 bên hòa (0), đầu thấp hơn là 0 -> cộng 0.
+    """
+    bonus = 0.0
+    for d in open_dos:
+        if d["name"] == current_do_name:
+            continue
+        bets = db.get_active_bets(do_name=d["name"], user_id=user_id)
+        if not bets:
+            continue
+        xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
+        xanh_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH")
+        do_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "DO")
+        do_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "DO")
+
+        pnl_if_xanh = xanh_win_net - do_lose
+        pnl_if_do = do_win_net - xanh_lose
+
+        if pnl_if_xanh > 0 and pnl_if_do > 0:
+            bonus += min(pnl_if_xanh, pnl_if_do)
+    return bonus
+
+
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
     u = db.get_user(user_id)
     open_dos = db.get_open_dos()
@@ -145,21 +171,23 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     remaining_debt_room = max(0.0, debt_limit - debt)
     max_capacity = bal + remaining_debt_room
 
-    # Tổng tiền gốc đang dùng trên TẤT CẢ các độ đang mở (chưa chốt)
     all_open_bets: list[dict] = []
     for d in open_dos:
         all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
 
-    total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
-    unused_capital = max(0.0, max_capacity - total_open_principal)
+    other_open_principal = sum(
+        float(b["amount"]) for b in all_open_bets if b["do_name"] != do["name"]
+    )
+    edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"], open_dos)
 
-    # Kèo hiện tại của khách trên chính độ đang đặt
+    # Vốn gốc còn dư sau khi tính các độ mở khác, cộng thêm phần lời 2 đầu thấp hơn (nếu có)
+    unused_capital = max(0.0, max_capacity - other_open_principal) + edge_bonus
+
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
     opp_side = "XANH" if side == "DO" else "DO"
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     last_side = existing_bets[-1]["side"] if existing_bets else None
 
-    # Đầu lời ròng (đã trừ 5% phế) của chuỗi kèo liên tiếp gần nhất ở cửa đối diện
     opp_streak_win_net = 0.0
     for b in reversed(existing_bets):
         if b["side"] == opp_side:
@@ -183,10 +211,9 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
             f"❌ Vượt hạn mức cho phép của cửa {side} ({do['name']})!\n"
             f"• Đầu lời ròng cửa {opp_side} gần nhất (sau 5% phế): <b>{fmt_num(opp_streak_win_net)}</b>\n"
             f"• Hạn mức đánh qua cửa {side} hiện tại: <b>{fmt_num(opp_hedge_allow)}</b>\n"
-            f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
+            f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
         )
 
-    # Kiểm tra rủi ro lỗ xấu nhất trên TẤT CẢ các độ mở (trần cứng tối đa = max_capacity * 2)
     other_dos_worst_loss = sum(
         max_worst_case_loss(user_id, d["name"])
         for d in open_dos
@@ -195,7 +222,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    hard_risk_cap = max_capacity * 2.0
+    hard_risk_cap = max_capacity * 2.0 + edge_bonus
     if total_worst_loss > hard_risk_cap + 1e-6:
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
