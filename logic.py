@@ -151,44 +151,39 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
     opp_side = "XANH" if side == "DO" else "DO"
 
+    total_principal = sum(float(b["amount"]) for b in existing_bets)
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
-    opp_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == opp_side)
     opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # TRƯỜNG HỢP 1: Khách đã có cược ở cửa đối diện -> ĐÁNH NGƯỢC 2 ĐẦU
-    # Được dùng đầu lời ròng sau 5% phế của cửa đối diện (+ phần vốn ví chưa dùng nếu còn)
-    if opp_principal > 0:
-        unused_capital = max(0.0, max_capacity - opp_principal)
-        max_reverse_principal = opp_win_net + unused_capital
-        new_same_principal = same_principal + amount
+    unused_capital = max(0.0, max_capacity - total_principal)
 
-        if new_same_principal > max_reverse_principal + 1e-6:
-            remain_reverse = max(0.0, max_reverse_principal - same_principal)
+    # Cho phép cược qua lại nhiều vòng: nếu cửa đối diện có đầu lời ròng (sau 5% phế),
+    # khách được dùng đầu lời ròng đó (+ vốn gốc chưa dùng nếu còn) để đánh sang cửa này.
+    if opp_win_net > 0:
+        allowed_budget = opp_win_net + unused_capital
+        if amount > allowed_budget + 1e-6:
             return (
                 False,
-                f"❌ Vượt hạn mức đánh ngược cửa {side}!\n"
+                f"❌ Vượt hạn mức đánh qua lại cửa {side}!\n"
                 f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
-                f"• Vốn dư chưa dùng: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b> | Còn đánh thêm được: <b>{fmt_num(remain_reverse)}</b>",
+                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Mức tối đa có thể đánh mã này cho cửa {side}: <b>{fmt_num(allowed_budget)}</b>",
             )
     else:
-        # TRƯỜNG HỢP 2: Chưa có cược ở cửa đối diện (đánh lần đầu hoặc đánh tiếp cùng cửa)
-        # Chỉ được dùng tiền vốn gốc khả dụng (Ví + Hạn mức nợ còn lại), không vượt quá max_capacity
-        new_same_principal = same_principal + amount
-        if new_same_principal > max_capacity + 1e-6:
-            remain_cap = max(0.0, max_capacity - same_principal)
+        # Không có đầu lời từ cửa kia -> chỉ được dùng phần vốn gốc chưa sử dụng
+        if amount > unused_capital + 1e-6:
             return (
                 False,
-                f"❌ Không thể đánh thêm vào cửa {side} (vượt tiền gốc khả dụng)!\n"
-                f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b>\n"
-                f"• Khả dụng gốc tối đa (Ví <b>{fmt_num(bal)}</b> + Hạn mức nợ còn <b>{fmt_num(remaining_debt_room)}</b>): <b>{fmt_num(max_capacity)}</b>\n"
-                f"• Vốn còn đánh thêm được: <b>{fmt_num(remain_cap)}</b>",
+                f"❌ Vượt vốn gốc khả dụng cho cửa {side}!\n"
+                f"• Đã dùng tiền gốc: <b>{fmt_num(total_principal)} / {fmt_num(max_capacity)}</b>\n"
+                f"• Vốn gốc còn có thể đánh thêm: <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b>",
             )
 
-    # TRƯỜNG HỢP 3: Kiểm tra rủi ro lỗ ròng tối đa ở cả 2 chiều (XANH ăn vs ĐỎ ăn)
+    # Kiểm tra rủi ro lỗ ròng tối đa giữa 2 đầu (XANH ăn vs ĐỎ ăn)
     worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
     if worst_loss > max_capacity + 1e-6:
         return (
