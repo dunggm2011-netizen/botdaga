@@ -145,6 +145,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     remaining_debt_room = max(0.0, debt_limit - debt)
     max_capacity = bal + remaining_debt_room
 
+    # Tổng tiền gốc đang dùng trên TẤT CẢ các độ đang mở (chưa chốt)
     all_open_bets: list[dict] = []
     for d in open_dos:
         all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
@@ -152,6 +153,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
     unused_capital = max(0.0, max_capacity - total_open_principal)
 
+    # Kèo hiện tại của khách trên chính độ đang đặt
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
     opp_side = "XANH" if side == "DO" else "DO"
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
@@ -160,26 +162,30 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    if opp_win_net > 0:
-        allowed_budget = opp_win_net + unused_capital
+    # Đầu lời ròng đối ứng còn trống để đánh sang cửa `side` (trừ đi phần đã đánh ở `side`)
+    available_opp_hedge = max(0.0, opp_win_net - same_principal)
+
+    if available_opp_hedge > 0:
+        allowed_budget = available_opp_hedge + unused_capital
         if amount > allowed_budget + 1e-6:
             return (
                 False,
-                f"❌ Vượt hạn mức đánh ngược cửa {side} ({do['name']})!\n"
-                f"• Đầu lời ròng cửa {opp_side} tại {do['name']} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
-                f"• Vốn gốc còn dư (tính trên mọi độ đang mở): <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Mức tối đa có thể đánh mã này: <b>{fmt_num(allowed_budget)}</b>",
+                f"❌ Vượt hạn mức đánh qua lại cửa {side} ({do['name']})!\n"
+                f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
+                f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b> -> Còn gác được: <b>{fmt_num(available_opp_hedge)}</b>\n"
+                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
             )
     else:
         if amount > unused_capital + 1e-6:
             return (
                 False,
-                f"❌ Không đủ vốn/hạn mức còn lại (đã dùng ở các độ đang mở)!\n"
-                f"• Đã dùng tiền gốc các độ mở: <b>{fmt_num(total_open_principal)} / {fmt_num(max_capacity)}</b>\n"
-                f"• Số tiền còn có thể đánh thêm: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Đã đánh cửa {side} ở {do['name']}: <b>{fmt_num(same_principal)}</b>",
+                f"❌ Đã hết hạn mức đánh thêm cửa {side} ({do['name']})!\n"
+                f"• Vốn gốc đã dùng các độ mở: <b>{fmt_num(total_open_principal)} / {fmt_num(max_capacity)}</b>\n"
+                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Đầu lời cửa {opp_side} còn trống để gác: <b>{fmt_num(available_opp_hedge)}</b>",
             )
 
+    # Kiểm tra rủi ro lỗ xấu nhất trên TẤT CẢ các độ mở (trần cứng tối đa = max_capacity * 2)
     other_dos_worst_loss = sum(
         max_worst_case_loss(user_id, d["name"])
         for d in open_dos
@@ -188,14 +194,13 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    allowed_risk_cap = max_capacity + (opp_win_net if opp_win_net > 0 else 0.0)
-    if total_worst_loss > allowed_risk_cap + 1e-6:
-        remain_risk = max(0.0, allowed_risk_cap - other_dos_worst_loss)
+    hard_risk_cap = max_capacity * 2.0
+    if total_worst_loss > hard_risk_cap + 1e-6:
+        remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
             False,
-            f"❌ Vượt khả năng chi trả còn lại sau khi tính các độ đang mở!\n"
-            f"• Rủi ro đang treo ở các độ khác: <b>{fmt_num(other_dos_worst_loss)}</b>\n"
-            f"• Rủi ro sau mã này: <b>{fmt_num(total_worst_loss)}</b> / Trần cho phép: <b>{fmt_num(allowed_risk_cap)}</b>\n"
+            f"❌ Vượt trần rủi ro tối đa của tài khoản!\n"
+            f"• Rủi ro sau mã này: <b>{fmt_num(total_worst_loss)}</b> / Trần tối đa: <b>{fmt_num(hard_risk_cap)}</b>\n"
             f"• Khả năng chịu rủi ro còn lại: <b>{fmt_num(remain_risk)}</b>",
         )
 
@@ -224,7 +229,6 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
-
 
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     u = db.get_user(target_uid)
