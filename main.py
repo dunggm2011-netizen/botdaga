@@ -18,6 +18,8 @@ from config import (
     QR_AMOUNT_MULTIPLIER,
     QUICK_BET_AMOUNTS,
     QUICK_WITHDRAW_AMOUNTS,
+    MIN_DEPOSIT_AMOUNT,
+    MIN_WITHDRAW_AMOUNT,
     PORT,
 )
 import database as db
@@ -103,8 +105,17 @@ def kb_user_do_picker(side: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     for d in db.get_open_dos():
         d_id = int(d["id"])
-        price_lbl = f"{float(d['xanh_win']):g}/{float(d['xanh_lose']):g}" if side == "XANH" else f"{float(d['do_win']):g}/{float(d['do_lose']):g}"
-        kb.add(types.InlineKeyboardButton(f"{d['name']} ({price_lbl})", callback_data=f"u_pickdo_{side}_{d_id}"))
+        price_lbl = (
+            f"{float(d['xanh_win']):g}/{float(d['xanh_lose']):g}"
+            if side == "XANH"
+            else f"{float(d['do_win']):g}/{float(d['do_lose']):g}"
+        )
+        kb.add(
+            types.InlineKeyboardButton(
+                f"{d['name']} ({price_lbl})",
+                callback_data=f"u_pickdo_{side}_{d_id}",
+            )
+        )
     kb.add(types.InlineKeyboardButton("🔙 Quay lại", callback_data="u_back"))
     return kb
 
@@ -146,13 +157,16 @@ def kb_user_amounts(side: str, do_id: int) -> types.InlineKeyboardMarkup:
     return kb
 
 
-def kb_withdraw_amounts() -> types.InlineKeyboardMarkup:
+def kb_withdraw_amounts(bal: float) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=3)
     btns = [
         types.InlineKeyboardButton(fmt_num(amt), callback_data=f"u_wd_amt_{amt}")
         for amt in QUICK_WITHDRAW_AMOUNTS
+        if amt <= bal + 1e-6
     ]
-    kb.add(*btns)
+    if btns:
+        kb.add(*btns)
+    kb.add(types.InlineKeyboardButton(f"💰 Rút hết ví ({fmt_num(bal)})", callback_data="u_wd_all"))
     kb.add(
         types.InlineKeyboardButton("✏️ Nhập số rút khác", callback_data="u_wd_custom"),
         types.InlineKeyboardButton("🔙 Quay lại", callback_data="u_back"),
@@ -161,7 +175,6 @@ def kb_withdraw_amounts() -> types.InlineKeyboardMarkup:
 
 
 def kb_master_viewer_panel() -> types.InlineKeyboardMarkup:
-    """Dành cho cổ đông / thành viên xem báo cáo trực tiếp ngay trong nhóm Master."""
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("📋 Độ đang chạy", callback_data="a_rep_live"),
@@ -296,7 +309,7 @@ def kb_deposit_presets(user_id: int, suggested_amt: float = 0.0) -> types.Inline
         )
     btns = [
         types.InlineKeyboardButton(f"+{fmt_num(amt)}", callback_data=f"a_dep_amt_{user_id}_{amt}")
-        for amt in [5000, 10000, 20000, 50000, 100000]
+        for amt in [250000, 500000, 1000000, 2000000, 5000000, 10000000]
     ]
     kb.add(*btns)
     kb.add(types.InlineKeyboardButton("✏️ Nhập số tiền khác", callback_data=f"a_dep_custom_{user_id}"))
@@ -486,7 +499,10 @@ def on_callback(call: types.CallbackQuery):
         for d in open_dos:
             active_bets.extend(db.get_active_bets(do_name=d["name"], user_id=uid))
         bets_txt = "\n".join(
-            [f"  • {b['do_name']} | {b['code']} | {b['side']} | {fmt_num(float(b['amount']))} (giá {b['price_str']})" for b in active_bets]
+            [
+                f"  • {b['do_name']} | {b['code']} | {b['side']} | {fmt_num(float(b['amount']))} (giá {b['price_str']})"
+                for b in active_bets
+            ]
         ) or "  <i>Chưa có mã nào đang chạy.</i>"
         txt = (
             f"<b>TÀI KHOẢN CỦA BẠN</b> (ID: <code>{uid}</code>)\n"
@@ -501,6 +517,7 @@ def on_callback(call: types.CallbackQuery):
         bot.send_message(
             chat_id,
             f"<b>CHỌN SỐ TIỀN CẦN NẠP</b>\n"
+            f"• Nạp tối thiểu: <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>\n"
             f"• Ngân hàng: <b>{BANK_INFO['bank']}</b> — STK: <code>{BANK_INFO['stk']}</code>\n"
             f"• Chủ TK: <b>{BANK_INFO['owner']}</b>\n"
             f"• Nội dung CK mặc định: <code>{uid}</code>\n\n"
@@ -510,11 +527,21 @@ def on_callback(call: types.CallbackQuery):
 
     elif data.startswith("u_dep_amt_"):
         amt = float(data.split("_")[3])
+        if amt < MIN_DEPOSIT_AMOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ Số tiền nạp tối thiểu là <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.",
+                reply_markup=kb_deposit_amounts(),
+            )
+            return
         send_deposit_qr(chat_id, uid, amt)
 
     elif data == "u_dep_custom":
         PENDING_STATE[uid] = {"action": "USER_DEP_CUSTOM_AMOUNT"}
-        bot.send_message(chat_id, "Nhập số tiền bạn muốn nạp:")
+        bot.send_message(
+            chat_id,
+            f"Nhập số tiền bạn muốn nạp (Tối thiểu: <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>):",
+        )
 
     elif data == "u_paid":
         st = PENDING_STATE.get(uid)
@@ -545,28 +572,52 @@ def on_callback(call: types.CallbackQuery):
 
     elif data == "u_withdraw":
         bal = float(u["balance"])
-        if bal <= 0:
+        if bal < MIN_WITHDRAW_AMOUNT:
             bot.send_message(
                 chat_id,
-                "❌ Số dư ví hiện tại của bạn đang là <b>0</b>, chưa thể rút tiền.",
+                f"❌ Số dư ví hiện tại là <b>{fmt_num(bal)}</b>, chưa đạt mức rút tối thiểu <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
                 reply_markup=kb_user_main(uid),
             )
         else:
             bot.send_message(
                 chat_id,
                 f"<b>RÚT TIỀN VỀ TÀI KHOẢN</b>\n"
-                f"• Số dư khả dụng: <b>{fmt_num(bal)}</b>\n\n"
-                f"Chọn mức tiền rút nhanh hoặc bấm <b>Nhập số rút khác</b>:",
-                reply_markup=kb_withdraw_amounts(),
+                f"• Rút tối thiểu: <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b> | Tối đa: <b>{fmt_num(bal)}</b>\n\n"
+                f"Chọn mức tiền rút nhanh hoặc bấm <b>Rút hết ví</b>:",
+                reply_markup=kb_withdraw_amounts(bal),
+            )
+
+    elif data == "u_wd_all":
+        bal = float(u["balance"])
+        if bal < MIN_WITHDRAW_AMOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ Số dư ví hiện tại là <b>{fmt_num(bal)}</b>, chưa đạt mức rút tối thiểu <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+                reply_markup=kb_user_main(uid),
+            )
+        else:
+            PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": bal}
+            bot.send_message(
+                chat_id,
+                f"<b>NHẬP THÔNG TIN NHẬN TIỀN RÚT HẾT VÍ ({fmt_num(bal)})</b>\n"
+                f"Gửi <b>ảnh mã QR</b> tài khoản nhận HOẶC nhắn theo mẫu:\n"
+                f"<code>Ngân hàng - Số tài khoản - Tên chủ TK</code>",
             )
 
     elif data.startswith("u_wd_amt_"):
         amt = float(data.split("_")[3])
-        if amt > float(u["balance"]) + 1e-6:
+        bal = float(u["balance"])
+        if amt < MIN_WITHDRAW_AMOUNT:
             bot.send_message(
                 chat_id,
-                f"❌ Số tiền rút vượt số dư ví (<b>{fmt_num(float(u['balance']))}</b>).",
-                reply_markup=kb_user_main(uid),
+                f"❌ Số tiền rút tối thiểu là <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+                reply_markup=kb_withdraw_amounts(bal),
+            )
+        elif amt > bal + 1e-6:
+            bot.send_message(
+                chat_id,
+                f"❌ Số tiền rút vượt số dư ví (Tối đa: <b>{fmt_num(bal)}</b>).",
+                reply_markup=kb_withdraw_amounts(bal),
             )
         else:
             PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": amt}
@@ -579,16 +630,30 @@ def on_callback(call: types.CallbackQuery):
             )
 
     elif data == "u_wd_custom":
+        bal = float(u["balance"])
         PENDING_STATE[uid] = {"action": "USER_WD_AMOUNT"}
-        bot.send_message(chat_id, f"Nhập số tiền bạn muốn rút (Tối đa: <b>{fmt_num(float(u['balance']))}</b>):")
+        bot.send_message(
+            chat_id,
+            f"Nhập số tiền bạn muốn rút (Tối thiểu: <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b> — Tối đa: <b>{fmt_num(bal)}</b>):",
+        )
 
     elif data.startswith("u_side_"):
         side = data.split("_")[2]
         if len(open_dos) > 1:
             side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
+            summary_lines = []
+            for d in open_dos:
+                p_lbl = (
+                    f"{float(d['xanh_win']):g}/{float(d['xanh_lose']):g}"
+                    if side == "XANH"
+                    else f"{float(d['do_win']):g}/{float(d['do_lose']):g}"
+                )
+                summary_lines.append(f"• <b>{d['name']}</b>: giá {side_label} <code>{p_lbl}</code>")
             bot.send_message(
                 chat_id,
-                f"Đang có <b>{len(open_dos)} độ mở</b>. Chọn độ bạn muốn đánh cửa <b>{side_label}</b>:",
+                f"Đang mở <b>{len(open_dos)} độ</b> cùng lúc:\n"
+                + "\n".join(summary_lines)
+                + f"\n\nChọn độ bạn muốn đánh cửa <b>{side_label}</b>:",
                 reply_markup=kb_user_do_picker(side),
             )
         else:
@@ -750,7 +815,11 @@ def on_callback(call: types.CallbackQuery):
 
         PENDING_STATE.pop(uid, None)
         out = settle_multiple_dos_logic(list(sel), result)
-        target_out_chat = MASTER_GROUP_ID if MASTER_GROUP_ID else (PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id)
+        target_out_chat = (
+            MASTER_GROUP_ID
+            if MASTER_GROUP_ID
+            else (PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id)
+        )
         panel_out = get_panel_by_chat(target_out_chat, "group" if target_out_chat != uid else "private", uid)
         do_names_str = ", ".join(out["do_names"])
 
@@ -993,8 +1062,12 @@ def on_text(message: types.Message):
             except ValueError:
                 bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
                 return
-            if amt <= 0:
-                bot.send_message(message.chat.id, "Số tiền nạp phải lớn hơn 0.", reply_markup=kb_user_main(uid))
+            if amt < MIN_DEPOSIT_AMOUNT:
+                bot.send_message(
+                    message.chat.id,
+                    f"❌ Số tiền nạp tối thiểu là <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.",
+                    reply_markup=kb_user_main(uid),
+                )
                 return
             send_deposit_qr(message.chat.id, uid, amt)
             return
@@ -1011,6 +1084,7 @@ def on_text(message: types.Message):
             return
 
         if act == "USER_WD_AMOUNT":
+            bal = float(u["balance"])
             try:
                 amt = float(txt.replace(".", "").replace(",", ""))
             except ValueError:
@@ -1018,11 +1092,20 @@ def on_text(message: types.Message):
                 bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
                 return
 
-            if amt <= 0 or amt > float(u["balance"]) + 1e-6:
+            if amt < MIN_WITHDRAW_AMOUNT:
                 PENDING_STATE.pop(uid, None)
                 bot.send_message(
                     message.chat.id,
-                    f"❌ Số tiền rút không hợp lệ hoặc vượt ví (<b>{fmt_num(float(u['balance']))}</b>).",
+                    f"❌ Số tiền rút tối thiểu là <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+                    reply_markup=kb_user_main(uid),
+                )
+                return
+
+            if amt > bal + 1e-6:
+                PENDING_STATE.pop(uid, None)
+                bot.send_message(
+                    message.chat.id,
+                    f"❌ Số tiền rút vượt số dư ví (Tối đa: <b>{fmt_num(bal)}</b>).",
                     reply_markup=kb_user_main(uid),
                 )
                 return
