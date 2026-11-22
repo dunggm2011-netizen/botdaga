@@ -160,37 +160,38 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     unused_capital = max(0.0, max_capacity - total_principal)
 
-    # Cho phép cược qua lại nhiều vòng: nếu cửa đối diện có đầu lời ròng (sau 5% phế),
-    # khách được dùng đầu lời ròng đó (+ vốn gốc chưa dùng nếu còn) để đánh sang cửa này.
+    # Đánh qua lại nhiều vòng tới khi hết tiền khả dụng trong tài khoản:
+    # Nếu cửa đối diện đang có đầu lời ròng (sau 5% phế), được dùng đầu lời ròng đó (+ vốn dư nếu còn)
     if opp_win_net > 0:
         allowed_budget = opp_win_net + unused_capital
         if amount > allowed_budget + 1e-6:
             return (
                 False,
-                f"❌ Vượt hạn mức đánh qua lại cửa {side}!\n"
+                f"❌ Vượt hạn mức đánh ngược cửa {side}!\n"
                 f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
                 f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
                 f"• Mức tối đa có thể đánh mã này cho cửa {side}: <b>{fmt_num(allowed_budget)}</b>",
             )
     else:
-        # Không có đầu lời từ cửa kia -> chỉ được dùng phần vốn gốc chưa sử dụng
+        # Không có đầu lời từ cửa đối diện -> chỉ được dùng phần vốn gốc chưa sử dụng
         if amount > unused_capital + 1e-6:
             return (
                 False,
-                f"❌ Vượt vốn gốc khả dụng cho cửa {side}!\n"
+                f"❌ Đã hết tiền khả dụng để đánh thêm cửa {side}!\n"
                 f"• Đã dùng tiền gốc: <b>{fmt_num(total_principal)} / {fmt_num(max_capacity)}</b>\n"
-                f"• Vốn gốc còn có thể đánh thêm: <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Khả dụng còn lại trong tài khoản: <b>{fmt_num(unused_capital)}</b>\n"
                 f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b>",
             )
 
-    # Kiểm tra rủi ro lỗ ròng tối đa giữa 2 đầu (XANH ăn vs ĐỎ ăn)
+    # Cho phép gác nhiều vòng tới khi chạm trần khả dụng + đầu thắng đang gác
     worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
-    if worst_loss > max_capacity + 1e-6:
+    allowed_risk_cap = max_capacity + (opp_win_net if opp_win_net > 0 else 0.0)
+    if worst_loss > allowed_risk_cap + 1e-6:
         return (
             False,
-            f"❌ Vượt khả năng chi trả / hạn mức nợ!\n"
+            f"❌ Đã chạm giới hạn rủi ro trong tài khoản!\n"
             f"• Rủi ro tối đa sau mã này: <b>{fmt_num(worst_loss)}</b> (Giá: <b>{win_u:g}/{lose_u:g}</b>)\n"
-            f"• Khả dụng: <b>{fmt_num(max_capacity)}</b>",
+            f"• Trần khả dụng cho phép: <b>{fmt_num(allowed_risk_cap)}</b>",
         )
 
     seq = int(do["bet_seq"])
