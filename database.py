@@ -179,12 +179,16 @@ def update_user_fields(user_id: int, **kwargs) -> None:
 def get_next_do_name() -> str:
     with get_conn() as conn:
         rows = conn.execute("SELECT name FROM dos").fetchall()
-    max_num = 0
+    used_nums: set[int] = set()
     for r in rows:
-        digits = "".join(ch for ch in str(r["name"]) if ch.isdigit())
-        if digits.isdigit():
-            max_num = max(max_num, int(digits))
-    return f"Độ {max_num + 1}"
+        parts = str(r["name"]).strip().split()
+        if parts and parts[-1].isdigit():
+            used_nums.add(int(parts[-1]))
+
+    next_num = 1
+    while next_num in used_nums:
+        next_num += 1
+    return f"Độ {next_num}"
 
 
 def get_do_by_id(do_id: int) -> dict | None:
@@ -216,8 +220,13 @@ def get_open_dos() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def create_new_do(name: str | None = None, xanh_win: float = 10.0, xanh_lose: float = 10.0,
-                  do_win: float = 10.0, do_lose: float = 10.0) -> dict:
+def create_new_do(
+    name: str | None = None,
+    xanh_win: float = 10.0,
+    xanh_lose: float = 10.0,
+    do_win: float = 10.0,
+    do_lose: float = 10.0,
+) -> dict:
     do_name = name or get_next_do_name()
     with get_conn() as conn:
         conn.execute(
@@ -248,8 +257,16 @@ def update_do(do_id: int, **kwargs) -> None:
         conn.commit()
 
 
-def add_bet_record(code: str, do_name: str, user_id: int, side: str, amount: float,
-                   win_net: float, lose_amount: float, price_str: str) -> None:
+def add_bet_record(
+    code: str,
+    do_name: str,
+    user_id: int,
+    side: str,
+    amount: float,
+    win_net: float,
+    lose_amount: float,
+    price_str: str,
+) -> None:
     with get_conn() as conn:
         conn.execute(
             """
@@ -292,8 +309,14 @@ def update_bet_status(bet_id: int, status: str) -> None:
         conn.commit()
 
 
-def create_withdrawal(user_id: int, amount: float, payout_text: str,
-                      qr_file_id: str, assigned_staff_id: int, created_at: str) -> int:
+def create_withdrawal(
+    user_id: int,
+    amount: float,
+    payout_text: str,
+    qr_file_id: str,
+    assigned_staff_id: int,
+    created_at: str,
+) -> int:
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
