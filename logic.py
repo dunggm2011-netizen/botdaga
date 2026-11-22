@@ -175,13 +175,11 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     for d in open_dos:
         all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
 
-    other_open_principal = sum(
-        float(b["amount"]) for b in all_open_bets if b["do_name"] != do["name"]
-    )
+    # Trừ toàn bộ vốn gốc đang dùng trên mọi độ mở (bao gồm cả độ hiện tại)
+    total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"], open_dos)
 
-    # Vốn gốc còn dư sau khi tính các độ mở khác, cộng thêm phần lời 2 đầu thấp hơn (nếu có)
-    unused_capital = max(0.0, max_capacity - other_open_principal) + edge_bonus
+    unused_capital = max(0.0, max_capacity - total_open_principal) + edge_bonus
 
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
     opp_side = "XANH" if side == "DO" else "DO"
