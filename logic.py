@@ -178,14 +178,13 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     base_unused = max(0.0, max_capacity - total_open_principal)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"], open_dos)
 
-    # Nếu các độ trước có lời 2 đầu, hạn mức khả dụng cho độ kế tiếp bị khống chế <= đầu ăn ít hơn (edge_bonus)
+    # Nếu có lời 2 đầu ở độ trước, giữ phần đệm edge_bonus và cộng thêm vốn gốc dư (bao gồm tiền mới nạp thêm)
     if edge_bonus > 0:
-        unused_capital = min(base_unused + edge_bonus, edge_bonus)
+        unused_capital = edge_bonus + base_unused
     else:
         unused_capital = base_unused
 
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
-    current_do_principal = sum(float(b["amount"]) for b in existing_bets)
     opp_side = "XANH" if side == "DO" else "DO"
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     last_side = existing_bets[-1]["side"] if existing_bets else None
@@ -214,16 +213,6 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
             f"• Đầu lời ròng cửa {opp_side} gần nhất (sau 5% phế): <b>{fmt_num(opp_streak_win_net)}</b>\n"
             f"• Hạn mức đánh qua cửa {side} hiện tại: <b>{fmt_num(opp_hedge_allow)}</b>\n"
             f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
-        )
-
-    # Nếu đang đánh ở độ kế tiếp khi có lời 2 đầu từ độ trước, khống chế tổng gốc/rủi ro của độ này <= edge_bonus
-    if edge_bonus > 0 and (current_do_principal + amount) > edge_bonus + 1e-6:
-        remain_do_cap = max(0.0, edge_bonus - current_do_principal)
-        return (
-            False,
-            f"❌ Độ kế tiếp chỉ được đánh tối đa bằng hoặc nhỏ hơn đầu ăn ít hơn của độ trước!\n"
-            f"• Đầu ăn ít hơn độ trước: <b>{fmt_num(edge_bonus)}</b>\n"
-            f"• Đã đánh ở {do['name']}: <b>{fmt_num(current_do_principal)}</b> | Còn đánh được: <b>{fmt_num(remain_do_cap)}</b>",
         )
 
     other_dos_worst_loss = sum(
