@@ -1,5 +1,5 @@
 from datetime import datetime
-from config import FEE_RATE, MASTER_IDS
+from config import FEE_RATE, MASTER_IDS, MIN_WITHDRAW_AMOUNT
 import database as db
 
 
@@ -28,7 +28,11 @@ def can_approve_item(actor_id: int, specific_assigned_id: int | None = None) -> 
     if actor_id in MASTER_IDS:
         return True, ""
 
-    target_id = specific_assigned_id if (specific_assigned_id and specific_assigned_id > 0) else get_assigned_approver_id()
+    target_id = (
+        specific_assigned_id
+        if (specific_assigned_id and specific_assigned_id > 0)
+        else get_assigned_approver_id()
+    )
     if target_id > 0 and actor_id != target_id:
         return False, f"Yêu cầu này đang chỉ định cho nhân viên ID <code>{target_id}</code> duyệt."
     return True, ""
@@ -233,14 +237,24 @@ def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     }
 
 
-def create_withdrawal_logic(user_id: int, amount: float, payout_text: str = "", qr_file_id: str = "") -> tuple[bool, str, dict | None]:
+def create_withdrawal_logic(
+    user_id: int, amount: float, payout_text: str = "", qr_file_id: str = ""
+) -> tuple[bool, str, dict | None]:
     u = db.get_user(user_id)
     bal = float(u["balance"])
 
-    if amount <= 0:
-        return False, "Số tiền rút phải lớn hơn 0.", None
+    if amount < MIN_WITHDRAW_AMOUNT:
+        return (
+            False,
+            f"❌ Số tiền rút tối thiểu là <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+            None,
+        )
     if amount > bal + 1e-6:
-        return False, f"Số dư ví không đủ. Số dư hiện tại của bạn là <b>{fmt_num(bal)}</b>.", None
+        return (
+            False,
+            f"❌ Số tiền rút vượt quá số dư ví (Tối đa có thể rút: <b>{fmt_num(bal)}</b>).",
+            None,
+        )
 
     new_bal = bal - amount
     info_save = payout_text if payout_text else "[Ảnh mã QR]"
@@ -256,7 +270,11 @@ def create_withdrawal_logic(user_id: int, amount: float, payout_text: str = "", 
         created_at=datetime.now().strftime("%H:%M - %d/%m/%Y"),
     )
     w_rec = db.get_withdrawal(w_id)
-    return True, f"✅ Đã tạo lệnh rút <b>{fmt_num(amount)}</b> (Mã rút: <code>#R{w_id:03d}</code>), đang chờ duyệt.", w_rec
+    return (
+        True,
+        f"✅ Đã tạo lệnh rút <b>{fmt_num(amount)}</b> (Mã rút: <code>#R{w_id:03d}</code>), đang chờ duyệt.",
+        w_rec,
+    )
 
 
 def confirm_withdrawal_logic(w_id: int) -> tuple[bool, str, dict | None]:
