@@ -1,141 +1,3 @@
-from datetime import datetime
-from config import FEE_RATE, MASTER_IDS, MIN_WITHDRAW_AMOUNT
-import database as db
-
-
-def fmt_num(val: float) -> str:
-    return f"{val:,.0f}".replace(",", ".")
-
-
-def fmt_signed(val: float) -> str:
-    if val > 0:
-        return f"🟢 <b>+{fmt_num(val)}</b>"
-    if val < 0:
-        return f"🔴 <b>-{fmt_num(abs(val))}</b>"
-    return "⚪ <b>0</b>"
-
-
-def get_assigned_approver_id() -> int:
-    raw = db.get_setting("assigned_approver_id", "0")
-    return int(raw) if raw.isdigit() else 0
-
-
-def set_assigned_approver_id(staff_id: int) -> None:
-    db.set_setting("assigned_approver_id", str(staff_id))
-
-
-def can_approve_item(actor_id: int, specific_assigned_id: int | None = None) -> tuple[bool, str]:
-    if actor_id in MASTER_IDS:
-        return True, ""
-
-    target_id = (
-        specific_assigned_id
-        if (specific_assigned_id and specific_assigned_id > 0)
-        else get_assigned_approver_id()
-    )
-    if target_id > 0 and actor_id != target_id:
-        return False, f"Yêu cầu này đang chỉ định cho nhân viên ID <code>{target_id}</code> duyệt."
-    return True, ""
-
-
-def parse_price_input(raw_text: str) -> dict:
-    """
-    Hỗ trợ nhập 1 cửa (tự động đảo giá cho cửa còn lại) hoặc nhập cả 2 cửa:
-    - 'XANH 1/10' -> XANH 1/10, ĐỎ 10/1
-    - 'DO 10/1'   -> ĐỎ 10/1, XANH 1/10
-    - 'XANH 1/10 | DO 10/5'
-    """
-    updates: dict[str, float] = {}
-    parts = [p.strip() for p in raw_text.split("|") if p.strip()]
-    if not parts:
-        raise ValueError("Empty price input")
-
-    for part in parts:
-        tokens = part.upper().split()
-        if len(tokens) < 2 or "/" not in tokens[1]:
-            raise ValueError("Invalid price format")
-        side = tokens[0]
-        win_s, lose_s = tokens[1].split("/", 1)
-        win_v, lose_v = float(win_s), float(lose_s)
-        if win_v <= 0 or lose_v <= 0:
-            raise ValueError("Price values must be positive")
-
-        if side == "XANH":
-            updates["xanh_win"] = win_v
-            updates["xanh_lose"] = lose_v
-        elif side in ("DO", "ĐỎ"):
-            updates["do_win"] = win_v
-            updates["do_lose"] = lose_v
-        else:
-            raise ValueError("Unknown side")
-
-    if "xanh_win" in updates and "do_win" not in updates:
-        updates["do_win"] = updates["xanh_lose"]
-        updates["do_lose"] = updates["xanh_win"]
-    elif "do_win" in updates and "xanh_win" not in updates:
-        updates["xanh_win"] = updates["do_lose"]
-        updates["xanh_lose"] = updates["do_win"]
-
-    return updates
-
-
-def parse_single_side_ratio(raw_text: str, chosen_side: str) -> dict:
-    """Nhập tỷ lệ cho 1 cửa đã chọn (VD: '5/10' hoặc 'XANH 5/10'), tự đảo chiều cho cửa còn lại."""
-    ratio_token = raw_text.strip().split()[-1]
-    w_s, l_s = ratio_token.split("/", 1)
-    w_v, l_v = float(w_s), float(l_s)
-    if w_v <= 0 or l_v <= 0:
-        raise ValueError("Ratio must be positive")
-
-    if chosen_side.upper() == "XANH":
-        return {"xanh_win": w_v, "xanh_lose": l_v, "do_win": l_v, "do_lose": w_v}
-    return {"do_win": w_v, "do_lose": l_v, "xanh_win": l_v, "xanh_lose": w_v}
-
-
-def get_side_price(do: dict, side: str) -> tuple[float, float]:
-    if side == "XANH":
-        return float(do["xanh_win"]), float(do["xanh_lose"])
-    return float(do["do_win"]), float(do["do_lose"])
-
-
-def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
-    base_u = win_u if win_u > 0 else 10.0
-    pay_u = lose_u if lose_u > 0 else 10.0
-    lose_amount = amount
-    win_gross = amount * (pay_u / base_u)
-    win_net = win_gross * (1.0 - FEE_RATE)  # Trừ 5% phế trên phần tiền lời
-    return {
-        "amount": amount,
-        "win_net": win_net,
-        "lose_amount": lose_amount,
-    }
-
-
-def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = None) -> float:
-    bets = db.get_active_bets(do_name=do_name, user_id=user_id)
-
-    xanh_win_net = sum(b["win_net"] for b in bets if b["side"] == "XANH")
-    xanh_lose = sum(b["lose_amount"] for b in bets if b["side"] == "XANH")
-
-    do_win_net = sum(b["win_net"] for b in bets if b["side"] == "DO")
-    do_lose = sum(b["lose_amount"] for b in bets if b["side"] == "DO")
-
-    if extra_bet:
-        if extra_bet["side"] == "XANH":
-            xanh_win_net += extra_bet["win_net"]
-            xanh_lose += extra_bet["lose_amount"]
-        else:
-            do_win_net += extra_bet["win_net"]
-            do_lose += extra_bet["lose_amount"]
-
-    pnl_if_xanh = xanh_win_net - do_lose
-    pnl_if_do = do_win_net - xanh_lose
-
-    loss_if_xanh = max(0.0, -pnl_if_xanh)
-    loss_if_do = max(0.0, -pnl_if_do)
-    return max(loss_if_xanh, loss_if_do)
-
-
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
     u = db.get_user(user_id)
     open_dos = db.get_open_dos()
@@ -152,50 +14,63 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     remaining_debt_room = max(0.0, debt_limit - debt)
     max_capacity = bal + remaining_debt_room
 
-    existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
-    opp_side = "XANH" if side == "DO" else "DO"
+    # Tổng tiền gốc đang dùng trên TẤT CẢ các độ đang mở (chưa chốt)
+    all_open_bets: list[dict] = []
+    for d in open_dos:
+        all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
 
-    total_principal = sum(float(b["amount"]) for b in existing_bets)
+    total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
+    unused_capital = max(0.0, max_capacity - total_open_principal)
+
+    # Kèo hiện tại của khách trên chính độ đang đặt
+    existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
+    opp_side = "XANH" if side == "DO" else "DO"
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    unused_capital = max(0.0, max_capacity - total_principal)
-
-    # Đánh qua lại nhiều vòng tới khi hết tiền khả dụng trong tài khoản:
-    # Nếu cửa đối diện đang có đầu lời ròng (sau 5% phế), được dùng đầu lời ròng đó (+ vốn dư nếu còn)
+    # Đánh qua lại nhiều vòng trên độ hiện tại: dùng đầu lời ròng cửa đối diện (+ vốn gốc còn dư toàn cục)
     if opp_win_net > 0:
         allowed_budget = opp_win_net + unused_capital
         if amount > allowed_budget + 1e-6:
             return (
                 False,
-                f"❌ Vượt hạn mức đánh ngược cửa {side}!\n"
-                f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
-                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Mức tối đa có thể đánh mã này cho cửa {side}: <b>{fmt_num(allowed_budget)}</b>",
+                f"❌ Vượt hạn mức đánh ngược cửa {side} ({do['name']})!\n"
+                f"• Đầu lời ròng cửa {opp_side} tại {do['name']} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
+                f"• Vốn gốc còn dư (tính trên mọi độ đang mở): <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Mức tối đa có thể đánh mã này: <b>{fmt_num(allowed_budget)}</b>",
             )
     else:
-        # Không có đầu lời từ cửa đối diện -> chỉ được dùng phần vốn gốc chưa sử dụng
+        # Không có đầu lời đối ứng ở độ này -> chỉ được dùng phần vốn gốc còn dư sau các độ đang mở
         if amount > unused_capital + 1e-6:
             return (
                 False,
-                f"❌ Đã hết tiền khả dụng để đánh thêm cửa {side}!\n"
-                f"• Đã dùng tiền gốc: <b>{fmt_num(total_principal)} / {fmt_num(max_capacity)}</b>\n"
-                f"• Khả dụng còn lại trong tài khoản: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b>",
+                f"❌ Không đủ vốn/hạn mức còn lại (đã dùng ở các độ đang mở)!\n"
+                f"• Đã dùng tiền gốc các độ mở: <b>{fmt_num(total_open_principal)} / {fmt_num(max_capacity)}</b>\n"
+                f"• Số tiền còn có thể đánh thêm: <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Đã đánh cửa {side} ở {do['name']}: <b>{fmt_num(same_principal)}</b>",
             )
 
-    # Cho phép gác nhiều vòng tới khi chạm trần khả dụng + đầu thắng đang gác
-    worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
+    # Tổng lỗ xấu nhất cộng dồn trên TẤT CẢ các độ đang mở (chưa chốt)
+    other_dos_worst_loss = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in open_dos
+        if d["name"] != do["name"]
+    )
+    current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side, **calc})
+    total_worst_loss = other_dos_worst_loss + current_do_worst_loss
+
     allowed_risk_cap = max_capacity + (opp_win_net if opp_win_net > 0 else 0.0)
-    if worst_loss > allowed_risk_cap + 1e-6:
+    if total_worst_loss > allowed_risk_cap + 1e-6:
+        remain_risk = max(0.0, allowed_risk_cap - other_dos_worst_loss)
         return (
             False,
-            f"❌ Đã chạm giới hạn rủi ro trong tài khoản!\n"
-            f"• Rủi ro tối đa sau mã này: <b>{fmt_num(worst_loss)}</b> (Giá: <b>{win_u:g}/{lose_u:g}</b>)\n"
-            f"• Trần khả dụng cho phép: <b>{fmt_num(allowed_risk_cap)}</b>",
+            f"❌ Vượt khả năng chi trả còn lại sau khi tính các độ đang mở!\n"
+            f"• Rủi ro đang treo ở các độ khác: <b>{fmt_num(other_dos_worst_loss)}</b>\n"
+            f"• Rủi ro sau mã này: <b>{fmt_num(total_worst_loss)}</b> / Trần cho phép: <b>{fmt_num(allowed_risk_cap)}</b>\n"
+            f"• Khả năng chịu rủi ro còn lại: <b>{fmt_num(remain_risk)}</b>",
         )
 
     seq = int(do["bet_seq"])
@@ -223,7 +98,6 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
-
 
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     u = db.get_user(target_uid)
