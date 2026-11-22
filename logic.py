@@ -156,22 +156,29 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     # Kèo hiện tại của khách trên chính độ đang đặt
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
     opp_side = "XANH" if side == "DO" else "DO"
-    same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    last_side = existing_bets[-1]["side"] if existing_bets else None
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Phần tiền đầu bên kia ăn (đã trừ 5% phế) còn trống để đánh sang cửa `side`
-    opp_hedge_left = max(0.0, opp_win_net - same_principal)
-    allowed_budget = opp_hedge_left + unused_capital
+    # Khi có đầu lời ròng cửa đối diện (đã trừ 5% phế):
+    # - Nếu đang đảo chiều từ cửa kia sang `side` (last_side == opp_side): dùng được tối đa đầu lời ròng cửa `opp_side` (+ vốn gốc dư)
+    # - Nếu đánh cùng cửa liên tiếp: chỉ dùng phần dư `max(0, opp_win_net - same_principal)` (+ vốn gốc dư)
+    same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
+    if opp_win_net > 0 and last_side == opp_side:
+        opp_hedge_allow = opp_win_net
+    else:
+        opp_hedge_allow = max(0.0, opp_win_net - same_principal)
+
+    allowed_budget = opp_hedge_allow + unused_capital
 
     if amount > allowed_budget + 1e-6:
         return (
             False,
             f"❌ Vượt hạn mức cho phép của cửa {side} ({do['name']})!\n"
             f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
-            f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b> -> Còn gác được: <b>{fmt_num(opp_hedge_left)}</b>\n"
+            f"• Hạn mức đánh qua cửa {side} hiện tại: <b>{fmt_num(opp_hedge_allow)}</b>\n"
             f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
         )
 
@@ -219,6 +226,9 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
+    
+
+
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     u = db.get_user(target_uid)
     new_balance = float(u["balance"]) + amount
