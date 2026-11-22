@@ -162,27 +162,25 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Đầu lời ròng đối ứng còn trống để đánh sang cửa `side` (trừ đi phần đã đánh ở `side`)
-    available_opp_hedge = max(0.0, opp_win_net - same_principal)
-
-    if available_opp_hedge > 0:
-        allowed_budget = available_opp_hedge + unused_capital
+    # Giới hạn đánh ngược nằm trong số tiền đầu lời ròng bên kia ăn (đã trừ 5% phế) (+ vốn gốc dư nếu còn)
+    if opp_win_net > 0:
+        allowed_budget = opp_win_net + unused_capital
         if amount > allowed_budget + 1e-6:
             return (
                 False,
-                f"❌ Vượt hạn mức đánh qua lại cửa {side} ({do['name']})!\n"
+                f"❌ Chỉ được đánh tối đa trong phần đầu lời bên kia ăn (đã trừ 5% phế)!\n"
                 f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
-                f"• Đã đánh cửa {side}: <b>{fmt_num(same_principal)}</b> -> Còn gác được: <b>{fmt_num(available_opp_hedge)}</b>\n"
-                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
+                f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
+                f"• Mức đánh tối đa cho phép mã này: <b>{fmt_num(allowed_budget)}</b>",
             )
     else:
         if amount > unused_capital + 1e-6:
             return (
                 False,
-                f"❌ Đã hết hạn mức đánh thêm cửa {side} ({do['name']})!\n"
+                f"❌ Không đủ vốn/hạn mức còn lại (đã tính các độ đang mở)!\n"
                 f"• Vốn gốc đã dùng các độ mở: <b>{fmt_num(total_open_principal)} / {fmt_num(max_capacity)}</b>\n"
                 f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
-                f"• Đầu lời cửa {opp_side} còn trống để gác: <b>{fmt_num(available_opp_hedge)}</b>",
+                f"• Đã đánh cửa {side} ở {do['name']}: <b>{fmt_num(same_principal)}</b>",
             )
 
     # Kiểm tra rủi ro lỗ xấu nhất trên TẤT CẢ các độ mở (trần cứng tối đa = max_capacity * 2)
