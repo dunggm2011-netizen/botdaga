@@ -156,18 +156,24 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     # Kèo hiện tại của khách trên chính độ đang đặt
     existing_bets = [b for b in all_open_bets if b["do_name"] == do["name"]]
     opp_side = "XANH" if side == "DO" else "DO"
-    opp_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
     same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side)
     last_side = existing_bets[-1]["side"] if existing_bets else None
+
+    # Đầu lời ròng (đã trừ 5% phế) của chuỗi kèo liên tiếp gần nhất ở cửa đối diện
+    opp_streak_win_net = 0.0
+    for b in reversed(existing_bets):
+        if b["side"] == opp_side:
+            opp_streak_win_net += float(b["win_net"])
+        else:
+            break
 
     win_u, lose_u = get_side_price(do, side)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Đầu lời ròng đối ứng (đã trừ 5% phế) dùng để đánh sang cửa `side`
-    if opp_win_net > 0 and last_side == opp_side:
-        opp_hedge_allow = opp_win_net
+    if opp_streak_win_net > 0 and last_side == opp_side:
+        opp_hedge_allow = opp_streak_win_net
     else:
-        opp_hedge_allow = max(0.0, opp_win_net - same_principal)
+        opp_hedge_allow = max(0.0, opp_streak_win_net - same_principal)
 
     allowed_budget = opp_hedge_allow + unused_capital
 
@@ -175,7 +181,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         return (
             False,
             f"❌ Vượt hạn mức cho phép của cửa {side} ({do['name']})!\n"
-            f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net)}</b>\n"
+            f"• Đầu lời ròng cửa {opp_side} gần nhất (sau 5% phế): <b>{fmt_num(opp_streak_win_net)}</b>\n"
             f"• Hạn mức đánh qua cửa {side} hiện tại: <b>{fmt_num(opp_hedge_allow)}</b>\n"
             f"• Vốn gốc còn dư: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
         )
