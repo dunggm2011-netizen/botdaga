@@ -27,12 +27,16 @@ BANK_INFO = {
     "owner": os.getenv("BANK_OWNER", "LE DINH HOANG"),
 }
 
-# Mức tiền nạp nhanh trước khi sinh VietQR (chỉnh theo đơn vị thực tế của bạn)
-QUICK_DEPOSIT_AMOUNTS = [5000, 10000, 20000, 50000, 100000]
+# Mức tiền nạp/rút/cược nhanh theo VNĐ
+QUICK_DEPOSIT_AMOUNTS = [250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
 QR_AMOUNT_MULTIPLIER = int(os.getenv("QR_AMOUNT_MULTIPLIER", "1"))
 
-QUICK_BET_AMOUNTS = [500, 1000, 2000, 5000, 10000]
-QUICK_WITHDRAW_AMOUNTS = [1000, 5000, 10000, 20000, 50000]
+QUICK_BET_AMOUNTS = [250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000, 50_000_000]
+QUICK_WITHDRAW_AMOUNTS = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000, 50_000_000]
+
+MIN_DEPOSIT_AMOUNT = float(os.getenv("MIN_DEPOSIT_AMOUNT", "250000"))
+MIN_WITHDRAW_AMOUNT = float(os.getenv("MIN_WITHDRAW_AMOUNT", "1000000"))
+
 FEE_RATE = 0.05  # Trừ 5% phế trên phần tiền lời
 DB_PATH = os.getenv("DB_PATH", "bot_ga_don.db")
 PORT = int(os.getenv("PORT", "10000"))
