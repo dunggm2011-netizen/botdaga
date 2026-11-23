@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+import math
 from config import FEE_RATE, MASTER_IDS, MIN_WITHDRAW_AMOUNT
 import database as db
 
@@ -69,7 +70,7 @@ def parse_price_input(raw_text: str) -> dict:
         side = tokens[0]
         win_s, lose_s = tokens[1].split("/", 1)
         win_v, lose_v = float(win_s), float(lose_s)
-        if win_v <= 0 or lose_v <= 0:
+        if not all(math.isfinite(v) and v > 0 for v in (win_v, lose_v)):
             raise ValueError("Price values must be positive")
 
         if side == "XANH":
@@ -95,9 +96,11 @@ def parse_single_side_ratio(raw_text: str, chosen_side: str) -> dict:
     ratio_token = raw_text.strip().split()[-1]
     w_s, l_s = ratio_token.split("/", 1)
     w_v, l_v = float(w_s), float(l_s)
-    if w_v <= 0 or l_v <= 0:
+    if not all(math.isfinite(v) and v > 0 for v in (w_v, l_v)):
         raise ValueError("Ratio must be positive")
 
+    if chosen_side.upper() not in ("XANH", "DO", "ĐỎ"):
+        raise ValueError("Cửa cược không hợp lệ")
     if chosen_side.upper() == "XANH":
         return {"xanh_win": w_v, "xanh_lose": l_v, "do_win": l_v, "do_lose": w_v}
     return {"do_win": w_v, "do_lose": l_v, "xanh_win": l_v, "xanh_lose": w_v}
@@ -110,8 +113,10 @@ def get_side_price(do: dict, side: str) -> tuple[float, float]:
 
 
 def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
-    base_u = win_u if win_u > 0 else 10.0
-    pay_u = lose_u if lose_u > 0 else 10.0
+    if not all(math.isfinite(float(v)) and float(v) > 0 for v in (amount, win_u, lose_u)):
+        raise ValueError("Số tiền và tỷ lệ cược phải hữu hạn, lớn hơn 0")
+    base_u = win_u
+    pay_u = lose_u
     lose_amount = amount
     win_gross = amount * (pay_u / base_u)
     fee_info = calc_fee_and_net_profit(win_gross)
@@ -177,7 +182,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     toàn tài khoản vẫn được kiểm tra độc lập khi nhận cược.
     """
     u = db.get_user(user_id)
-    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
+    open_dos = [d for d in db.get_open_dos() if d.get("status") in ("OPEN", "HOLD")]
     if do_id:
         do = db.get_do_by_id(do_id)
     else:
@@ -208,10 +213,17 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     other_principal = sum(float(b["amount"]) for b in other_bets)
     total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
 
-    locked_capital = other_principal + cur_do_locked_capital
+    # Khóa theo tổn thất lớn nhất của từng độ chưa quyết toán, gồm cả HOLD.
+    # Không dùng tổng tiền gốc (đã được đối ứng) để khóa trùng vốn.
+    other_worst_loss = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in open_dos if not do or d["id"] != do["id"]
+    )
+    locked_capital = other_worst_loss + cur_do_locked_capital
     base_unused = max(0.0, max_capacity - locked_capital)
-    edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"] if do else "", open_dos)
-    unused_capital = max(0.0, base_unused + edge_bonus)
+    # Không cộng lợi nhuận chưa quyết toán vào sức chứa tài khoản.
+    edge_bonus = 0.0
+    unused_capital = base_unused
 
     def _side_max(target_side: str) -> tuple[float, float]:
         opp_win_net = do_win_net_sum if target_side == "XANH" else xanh_win_net_sum
@@ -230,6 +242,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "max_capacity": max_capacity,
         "total_open_principal": total_open_principal,
         "locked_capital": locked_capital,
+        "other_worst_loss": other_worst_loss,
         "base_unused": base_unused,
         "edge_bonus": edge_bonus,
         "unused_capital": unused_capital,
@@ -284,6 +297,9 @@ def _get_or_create_do_record(
                 existing = dict(row)
 
     if existing:
+        if existing.get("status") in ("CLOSED", "CANCELLED", "DRAW"):
+            # Tên độ phải duy nhất theo dữ liệu hiện tại; không hồi sinh độ đã chốt.
+            return None
         db.update_do(
             int(existing["id"]),
             status="OPEN",
@@ -363,12 +379,12 @@ def open_specific_do_logic(
 
 
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
-    side_norm = side.upper()
+    side_norm = str(side).strip().upper().replace("ĐỎ", "DO")
     if side_norm not in ("XANH", "DO"):
         return False, "Cửa đặt không hợp lệ."
 
     u = db.get_user(user_id)
-    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
+    open_dos = [d for d in db.get_open_dos() if d.get("status") in ("OPEN", "HOLD")]
     if do_id:
         do = db.get_do_by_id(do_id)
     else:
@@ -376,8 +392,12 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     if not do or do.get("status") != "OPEN":
         return False, "Độ này hiện đang tạm hoãn, khóa hoặc đã chốt."
-    if amount <= 0:
-        return False, "Số tiền đặt phải lớn hơn 0."
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError, OverflowError):
+        return False, "Số tiền đặt không hợp lệ."
+    if not math.isfinite(amount) or amount <= 0:
+        return False, "Số tiền đặt phải hữu hạn và lớn hơn 0."
 
     bal = float(u["balance"])
     debt = float(u["debt"])
@@ -397,7 +417,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     # Hạn mức áp dụng cho mã mới, không phải tổng cược của cả cửa.
     allowed_budget = lim["max_xanh"] if side_norm == "XANH" else lim["max_do"]
-    if amount > allowed_budget + 1e-6:
+    if not math.isfinite(allowed_budget) or amount > allowed_budget + 1e-6:
         return (
             False,
             f"❌ Vượt hạn mức mã cược cửa {side_norm} ({do['name']})!\n"
@@ -409,7 +429,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     other_dos_worst_loss = sum(
         max_worst_case_loss(user_id, d["name"])
         for d in open_dos
-        if d["name"] != do["name"]
+        if d["id"] != do["id"]
     )
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side_norm, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
@@ -424,21 +444,15 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
             f"• Khả năng chịu rủi ro còn lại: <b>{fmt_num(remain_risk)}</b>",
         )
 
-    seq = int(do["bet_seq"])
-    code = f"#M{seq:02d}"
     price_str = f"{win_u:g}/{lose_u:g}"
-
-    db.add_bet_record(
-        code=code,
-        do_name=do["name"],
-        user_id=user_id,
-        side=side_norm,
-        amount=amount,
-        win_net=calc["win_net"],
-        lose_amount=calc["lose_amount"],
-        price_str=price_str,
-    )
-    db.update_do(int(do["id"]), bet_seq=seq + 1)
+    try:
+        code = db.add_bet_with_sequence(
+            do_id=int(do["id"]), user_id=user_id, side=side_norm,
+            amount=amount, win_net=calc["win_net"],
+            lose_amount=calc["lose_amount"], price_str=price_str,
+        )
+    except Exception as exc:
+        return False, f"Không lưu được mã cược: {exc}"
 
     side_label = "🟢 XANH" if side_norm == "XANH" else "🔴 ĐỎ"
     msg = (
@@ -453,6 +467,9 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     u = db.get_user(target_uid)
+    amount = float(amount)
+    if not math.isfinite(amount) or amount <= 0:
+        raise ValueError("Số tiền nạp phải hữu hạn và lớn hơn 0")
     new_balance = float(u["balance"]) + amount
     db.update_user_fields(target_uid, balance=new_balance)
     new_profit = db.add_realized_profit(amount)
@@ -469,6 +486,12 @@ def create_withdrawal_logic(
     u = db.get_user(user_id)
     bal = float(u["balance"])
 
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError, OverflowError):
+        return False, "Số tiền rút không hợp lệ.", None
+    if not math.isfinite(amount) or amount <= 0:
+        return False, "Số tiền rút phải hữu hạn và lớn hơn 0.", None
     if amount < MIN_WITHDRAW_AMOUNT:
         return (
             False,
