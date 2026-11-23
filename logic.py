@@ -242,9 +242,29 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     edge_bonus = 0.0
 
     def _side_max(target_side: str) -> tuple[float, float]:
-        opp_win_net = do_win_net_sum if target_side == "XANH" else xanh_win_net_sum
-        hedge_room = max(0.0, opp_win_net)
-        return opp_win_net, max(0.0, hedge_room + unused_capital)
+        """Trả về tiền thắng ròng cửa đối diện và hạn mức cược thêm của cửa này.
+
+        Phương án B:
+        - Nếu cửa đối diện đã có cược: tổng cược cửa này (đã cược + cược mới)
+          không được vượt tiền thắng ròng thực tế của cửa đối diện.
+        - Nếu chưa có cược cửa đối diện: chỉ dùng vốn khả dụng còn lại.
+        - unused_capital đã trừ rủi ro đang treo, nên không cộng/trừ lại vốn
+          hoặc phần cược cũ lần thứ hai.
+        """
+        if target_side == "XANH":
+            opp_win_net = do_win_net_sum
+            own_stake = xanh_lose_sum
+            has_opposite_bets = any(b["side"] == "DO" for b in existing_bets)
+        else:
+            opp_win_net = xanh_win_net_sum
+            own_stake = do_lose_sum
+            has_opposite_bets = any(b["side"] == "XANH" for b in existing_bets)
+
+        if has_opposite_bets:
+            remaining = max(0.0, max(0.0, opp_win_net) - own_stake)
+        else:
+            remaining = max(0.0, unused_capital)
+        return opp_win_net, remaining
 
     xanh_opp_win, max_xanh = _side_max("XANH")
     do_opp_win, max_do = _side_max("DO")
@@ -423,19 +443,21 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     opp_side = "XANH" if side_norm == "DO" else "DO"
 
     opp_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    own_side_stake_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side_norm)
     win_u, lose_u = get_side_price(do, side_norm)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    hedge_room = max(0.0, opp_win_net_sum)
-    allowed_budget = hedge_room + unused_capital
+    # Hạn mức trong lim đã trừ tổng tiền cửa này đã cược; đây là số được
+    # phép đặt THÊM cho mã hiện tại, không phải hạn mức tổng.
+    allowed_budget = lim["max_xanh"] if side_norm == "XANH" else lim["max_do"]
 
     if amount > allowed_budget + 1e-6:
         return (
             False,
             f"❌ Vượt hạn mức cho phép của cửa {side_norm} ({do['name']})!\n"
-            f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
-            f"• Hạn mức đánh qua cửa {side_norm} hiện tại: <b>{fmt_num(hedge_room)}</b>\n"
-            f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
+            f"• Tiền thắng ròng cửa đối diện {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
+            f"• Tổng đã cược cửa {side_norm}: <b>{fmt_num(own_side_stake_sum)}</b>\n"
+            f"• Số tiền còn được phép cược thêm: <b>{fmt_num(allowed_budget)}</b>",
         )
 
     risk_active_dos = [
