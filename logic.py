@@ -1,6 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from config import FEE_RATE, MASTER_IDS, MIN_WITHDRAW_AMOUNT
 import database as db
+
+VN_TZ = timezone(timedelta(hours=7))
 
 
 def fmt_num(val: float) -> str:
@@ -158,9 +160,11 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Tính toàn bộ hạn mức cược của khách trên độ mục tiêu (hoặc toàn bộ các độ mở):
-    - unused_capital: vốn gốc dư + phần đệm lời 2 đầu thấp hơn (nếu có) + tiền mới nạp thêm.
-    - max_xanh / max_do: hạn mức đặt tối đa trên từng cửa của độ đó (đã tính đầu lời ròng đối ứng).
+    Tính toàn bộ hạn mức cược của khách trên độ mục tiêu (hoặc độ đang mở):
+    - Bảo toàn phế 5% trên đầu lời ròng.
+    - Khi có edge_bonus từ độ khác lời 2 đầu, hạn mức khả dụng của độ kế tiếp
+      được giới hạn theo edge_bonus + vốn dư thực tế (bao gồm tiền mới nạp thêm),
+      trừ đi phần đã dùng ở chính độ hiện tại để các vòng sau không bị phình lố tiền.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_open_dos() if d["status"] == "OPEN"]
@@ -182,14 +186,22 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
     base_unused = max(0.0, max_capacity - total_open_principal)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"] if do else "", open_dos)
-    unused_capital = (edge_bonus + base_unused) if edge_bonus > 0 else base_unused
 
     existing_bets = [b for b in all_open_bets if do and b["do_name"] == do["name"]]
+    current_do_principal = sum(float(b["amount"]) for b in existing_bets)
+
+    if edge_bonus > 0:
+        allowed_do_cap = edge_bonus + base_unused
+        unused_capital = max(0.0, allowed_do_cap - current_do_principal)
+    else:
+        unused_capital = base_unused
+
     last_side = existing_bets[-1]["side"] if existing_bets else None
 
     def _side_max(target_side: str) -> tuple[float, float]:
         opp_side = "XANH" if target_side == "DO" else "DO"
         same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == target_side)
+
         opp_streak_win_net = 0.0
         for b in reversed(existing_bets):
             if b["side"] == opp_side:
@@ -274,6 +286,139 @@ def build_user_wallet_and_bets_text(user_id: int, do_id: int | None = None) -> s
     return "\n".join(lines)
 
 
+def can_open_do_by_time(now_dt: datetime | None = None) -> tuple[bool, str]:
+    """
+    Chỉ cho phép mở độ từ 07:00 sáng trở đi (giờ Việt Nam UTC+7).
+    """
+    current = now_dt.astimezone(VN_TZ) if now_dt else datetime.now(VN_TZ)
+    if current.hour < 7:
+        return (
+            False,
+            f"⏰ Chưa tới giờ mở độ! Hệ thống chỉ mở độ từ <b>07:00</b> sáng "
+            f"(Hiện tại: <b>{current.strftime('%H:%M - %d/%m/%Y')}</b>).",
+        )
+    return True, ""
+
+
+def normalize_do_name(raw_do: str | int) -> str:
+    """
+    Chuẩn hóa số hoặc tên độ thành 'Độ X' (ví dụ '3' -> 'Độ 3', '5' -> 'Độ 5').
+    """
+    s = str(raw_do).strip()
+    if s.isdigit():
+        return f"Độ {int(s)}"
+    low = s.lower()
+    if low.startswith("độ"):
+        tail = s[2:].strip()
+        if tail.isdigit():
+            return f"Độ {int(tail)}"
+        return f"Độ {tail}".strip()
+    return s
+
+
+def _get_or_create_do_record(
+    do_name: str,
+    xanh_win: float,
+    xanh_lose: float,
+    do_win: float,
+    do_lose: float,
+) -> dict | None:
+    existing = None
+    if hasattr(db, "get_do_by_name"):
+        existing = db.get_do_by_name(do_name)
+    else:
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM dos WHERE name = ? ORDER BY id DESC LIMIT 1",
+                (do_name,),
+            ).fetchone()
+            if row:
+                existing = dict(row)
+
+    if existing:
+        db.update_do(
+            int(existing["id"]),
+            status="OPEN",
+            xanh_win=xanh_win,
+            xanh_lose=xanh_lose,
+            do_win=do_win,
+            do_lose=do_lose,
+        )
+        return db.get_do_by_id(int(existing["id"]))
+
+    if hasattr(db, "create_do"):
+        new_id = db.create_do(
+            name=do_name,
+            xanh_win=xanh_win,
+            xanh_lose=xanh_lose,
+            do_win=do_win,
+            do_lose=do_lose,
+            status="OPEN",
+        )
+        return db.get_do_by_id(int(new_id))
+
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO dos (name, xanh_win, xanh_lose, do_win, do_lose, status, bet_seq)
+            VALUES (?, ?, ?, ?, ?, 'OPEN', 1)
+            """,
+            (do_name, xanh_win, xanh_lose, do_win, do_lose),
+        )
+        conn.commit()
+        new_id = cur.lastrowid
+    return db.get_do_by_id(int(new_id))
+
+
+def open_specific_do_logic(
+    raw_do: str | int,
+    xanh_win: float = 10.0,
+    xanh_lose: float = 10.0,
+    do_win: float = 10.0,
+    do_lose: float = 10.0,
+    exclusive_active: bool = True,
+) -> tuple[bool, str, dict | None]:
+    """
+    Mở một độ tùy ý (Độ 3 trước, Độ 2 sau, Độ 5...) từ 07:00 sáng.
+    Khi exclusive_active=True: chuyển các độ OPEN khác sang 'HOLD' để
+    mở độ nào thì khách chỉ được đánh độ đó, tránh đánh nhầm độ dời lịch/hoãn.
+    """
+    ok_time, time_msg = can_open_do_by_time()
+    if not ok_time:
+        return False, time_msg, None
+
+    do_name = normalize_do_name(raw_do)
+    if not do_name or do_name == "Độ":
+        return False, "❌ Số hoặc tên độ không hợp lệ (ví dụ nhập <code>3</code> hoặc <code>Độ 3</code>).", None
+
+    held_names: list[str] = []
+    if exclusive_active:
+        for d in db.get_open_dos():
+            if d.get("status") == "OPEN" and d.get("name") != do_name:
+                db.update_do(int(d["id"]), status="HOLD")
+                held_names.append(str(d["name"]))
+
+    do_rec = _get_or_create_do_record(
+        do_name=do_name,
+        xanh_win=xanh_win,
+        xanh_lose=xanh_lose,
+        do_win=do_win,
+        do_lose=do_lose,
+    )
+    if not do_rec:
+        return False, f"❌ Không thể mở <b>{do_name}</b>.", None
+
+    msg = (
+        f"✅ <b>ĐÃ MỞ {do_name.upper()}</b> "
+        f"(XANH <code>{xanh_win:g}/{xanh_lose:g}</code> | ĐỎ <code>{do_win:g}/{do_lose:g}</code>).\n"
+        f"• Hiện chỉ nhận cược cho <b>{do_name}</b> để tránh đánh nhầm độ."
+    )
+    if held_names:
+        msg += f"\n• Đã chuyển sang trạng thái chờ/hoãn: <b>{', '.join(held_names)}</b>."
+
+    return True, msg, do_rec
+
+
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
     side_norm = side.upper()
     if side_norm not in ("XANH", "DO"):
@@ -287,7 +432,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         do = open_dos[-1] if open_dos else None
 
     if not do or do["status"] != "OPEN":
-        return False, "Độ đã chọn đang hoãn, khóa hoặc đã chốt."
+        return False, "Độ này hiện đang tạm hoãn, khóa hoặc đã chốt."
     if amount <= 0:
         return False, "Số tiền đặt phải lớn hơn 0."
 
@@ -418,7 +563,7 @@ def create_withdrawal_logic(
         payout_text=payout_text,
         qr_file_id=qr_file_id,
         assigned_staff_id=assigned_id,
-        created_at=datetime.now().strftime("%H:%M - %d/%m/%Y"),
+        created_at=datetime.now(VN_TZ).strftime("%H:%M - %d/%m/%Y"),
     )
     w_rec = db.get_withdrawal(w_id)
     return (
@@ -543,7 +688,7 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
 
 
 def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict[int, float]) -> str:
-    now = datetime.now()
+    now = datetime.now(VN_TZ)
     day_key = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M - %d/%m/%Y")
     house_net = -sum(do_user_net.values())
@@ -616,8 +761,9 @@ def build_live_report_text() -> str:
 
 
 def build_pnl_report_text() -> str:
-    now_str = datetime.now().strftime("%H:%M - %d/%m/%Y")
-    day_key = datetime.now().strftime("%Y-%m-%d")
+    now_dt = datetime.now(VN_TZ)
+    now_str = now_dt.strftime("%H:%M - %d/%m/%Y")
+    day_key = now_dt.strftime("%Y-%m-%d")
     settled_rows = db.get_settled_dos_by_day(day_key)
     users = db.get_all_users()
     realized = db.get_realized_profit()
@@ -626,7 +772,7 @@ def build_pnl_report_text() -> str:
     house_pnl = -total_user_pnl
 
     lines = [
-        f"<b>👑 BÁO CÁO MASTER — TÌNH HÌNH ĐỘ & DÒNG TIỀN</b>",
+        "<b>👑 BÁO CÁO MASTER — TÌNH HÌNH ĐỘ & DÒNG TIỀN</b>",
         f"<i>Cập nhật: {now_str}</i>\n",
     ]
 
@@ -653,8 +799,9 @@ def build_pnl_report_text() -> str:
 
 
 def build_daily_report_text(day_key: str | None = None) -> str:
-    target_day = day_key or datetime.now().strftime("%Y-%m-%d")
-    now_str = datetime.now().strftime("%H:%M - %d/%m/%Y")
+    now_dt = datetime.now(VN_TZ)
+    target_day = day_key or now_dt.strftime("%Y-%m-%d")
+    now_str = now_dt.strftime("%H:%M - %d/%m/%Y")
     rows = db.get_settled_dos_by_day(target_day)
     users = db.get_all_users()
     realized = db.get_realized_profit()
@@ -689,7 +836,7 @@ def build_daily_report_text(day_key: str | None = None) -> str:
 
 
 def close_day_accounting_logic(day_key: str | None = None) -> str:
-    target_day = day_key or datetime.now().strftime("%Y-%m-%d")
+    target_day = day_key or datetime.now(VN_TZ).strftime("%Y-%m-%d")
     report_snapshot = build_daily_report_text(target_day)
     with db.get_conn() as conn:
         conn.execute("UPDATE users SET pnl_net = 0.0")
