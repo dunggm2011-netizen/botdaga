@@ -1,5 +1,4 @@
 from datetime import datetime, timezone, timedelta
-import math
 from config import FEE_RATE, MASTER_IDS, MIN_WITHDRAW_AMOUNT
 import database as db
 
@@ -24,10 +23,7 @@ def calc_fee_and_net_profit(gross_profit: float) -> dict:
     - Chỉ tính trên lợi nhuận trước khấu trừ.
     - Khấu trừ = lợi nhuận * 5%, thực nhận = lợi nhuận * 95%.
     """
-    profit = float(gross_profit)
-    if not math.isfinite(profit):
-        raise ValueError("Gross profit must be a finite number")
-    profit = max(0.0, profit)
+    profit = max(0.0, float(gross_profit))
     fee_amount = profit * FEE_RATE
     net_profit = profit - fee_amount
     return {
@@ -73,7 +69,7 @@ def parse_price_input(raw_text: str) -> dict:
         side = tokens[0]
         win_s, lose_s = tokens[1].split("/", 1)
         win_v, lose_v = float(win_s), float(lose_s)
-        if not math.isfinite(win_v) or not math.isfinite(lose_v) or win_v <= 0 or lose_v <= 0:
+        if win_v <= 0 or lose_v <= 0:
             raise ValueError("Price values must be positive")
 
         if side == "XANH":
@@ -96,15 +92,10 @@ def parse_price_input(raw_text: str) -> dict:
 
 
 def parse_single_side_ratio(raw_text: str, chosen_side: str) -> dict:
-    tokens = raw_text.strip().split()
-    if not tokens:
-        raise ValueError("Empty ratio input")
-    ratio_token = tokens[-1]
-    if "/" not in ratio_token:
-        raise ValueError("Invalid ratio format")
+    ratio_token = raw_text.strip().split()[-1]
     w_s, l_s = ratio_token.split("/", 1)
     w_v, l_v = float(w_s), float(l_s)
-    if not math.isfinite(w_v) or not math.isfinite(l_v) or w_v <= 0 or l_v <= 0:
+    if w_v <= 0 or l_v <= 0:
         raise ValueError("Ratio must be positive")
 
     if chosen_side.upper() == "XANH":
@@ -119,15 +110,8 @@ def get_side_price(do: dict, side: str) -> tuple[float, float]:
 
 
 def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
-    amount = float(amount)
-    win_u = float(win_u)
-    lose_u = float(lose_u)
-    if not all(math.isfinite(v) for v in (amount, win_u, lose_u)):
-        raise ValueError("Bet amount and odds must be finite numbers")
-    if amount <= 0 or win_u <= 0 or lose_u <= 0:
-        raise ValueError("Bet amount and odds must be positive")
-    base_u = win_u
-    pay_u = lose_u
+    base_u = win_u if win_u > 0 else 10.0
+    pay_u = lose_u if lose_u > 0 else 10.0
     lose_amount = amount
     win_gross = amount * (pay_u / base_u)
     fee_info = calc_fee_and_net_profit(win_gross)
@@ -190,8 +174,11 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
     Tính hạn mức từng cửa trên độ đang chọn:
     - Tách riêng vốn đang khóa rủi ro (chưa quyết toán) và vốn chưa sử dụng.
-    - Đầu lời ròng cửa đối diện (sau 5% phế) được mở làm hạn mức đánh ngược qua cửa kia,
-      cộng thêm phần vốn chưa sử dụng và phần đệm 2 đầu từ độ khác.
+    - Nếu cửa đối diện đã có lợi nhuận ròng, tổng tiền cược ở cửa đang xét
+      không được vượt quá khoản lợi nhuận ròng đó.
+    - Hạn mức còn được cược = lợi nhuận ròng cửa đối diện trừ tổng tiền
+      đã cược ở cửa đang xét. Không cộng số dư/vốn chưa sử dụng vào hạn mức hedge.
+    - Nếu chưa có cược ở cửa đối diện, cửa đầu tiên vẫn dùng sức chứa tài khoản.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
@@ -228,14 +215,26 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     locked_capital = other_principal + cur_do_locked_capital
     base_unused = max(0.0, max_capacity - locked_capital)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"] if do else "", open_dos)
-    # Vốn chưa sử dụng chỉ lấy từ sức chịu rủi ro còn lại của tài khoản.
-    # Không cộng edge_bonus của độ khác để tránh tạo thêm hạn mức ảo.
-    unused_capital = max(0.0, base_unused)
+    unused_capital = max(0.0, base_unused + edge_bonus)
 
     def _side_max(target_side: str) -> tuple[float, float]:
-        opp_win_net = do_win_net_sum if target_side == "XANH" else xanh_win_net_sum
-        hedge_room = max(0.0, opp_win_net)
-        return opp_win_net, max(0.0, hedge_room + unused_capital)
+        # Khi đã có cược ở cửa đối diện, tổng cược cửa này bị khống chế
+        # bởi lợi nhuận ròng của cửa đối diện (đã trừ phí). Trừ đi số
+        # tiền đã cược ở cửa đang xét để ra hạn mức CÒN ĐƯỢC cược thêm.
+        if target_side == "XANH":
+            opp_win_net = do_win_net_sum
+            already_on_target = xanh_lose_sum
+        else:
+            opp_win_net = xanh_win_net_sum
+            already_on_target = do_lose_sum
+
+        if opp_win_net > 0:
+            remaining = max(0.0, opp_win_net - already_on_target)
+        else:
+            # Cho phép đặt cửa đầu tiên theo sức chứa tài khoản; quy tắc
+            # hedge chỉ bắt đầu áp dụng khi cửa đối diện đã có lợi nhuận ròng.
+            remaining = unused_capital
+        return opp_win_net, remaining
 
     xanh_opp_win, max_xanh = _side_max("XANH")
     do_opp_win, max_do = _side_max("DO")
@@ -353,6 +352,12 @@ def open_specific_do_logic(
         return False, "❌ Số hoặc tên độ không hợp lệ (ví dụ nhập <code>3</code> hoặc <code>Độ 3</code>).", None
 
     held_names: list[str] = []
+    if exclusive_active:
+        for d in db.get_open_dos():
+            if d.get("status") == "OPEN" and d.get("name") != do_name:
+                db.update_do(int(d["id"]), status="HOLD")
+                held_names.append(str(d["name"]))
+
     do_rec = _get_or_create_do_record(
         do_name=do_name,
         xanh_win=xanh_win,
@@ -362,12 +367,6 @@ def open_specific_do_logic(
     )
     if not do_rec:
         return False, f"❌ Không thể mở <b>{do_name}</b>.", None
-
-    if exclusive_active:
-        for d in db.get_open_dos():
-            if d.get("status") == "OPEN" and int(d["id"]) != int(do_rec["id"]):
-                db.update_do(int(d["id"]), status="HOLD")
-                held_names.append(str(d["name"]))
 
     msg = (
         f"✅ <b>ĐÃ MỞ {do_name.upper()}</b> "
@@ -394,12 +393,8 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     if not do or do.get("status") != "OPEN":
         return False, "Độ này hiện đang tạm hoãn, khóa hoặc đã chốt."
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        return False, "Số tiền đặt không hợp lệ."
-    if not math.isfinite(amount) or amount <= 0:
-        return False, "Số tiền đặt phải là số hữu hạn lớn hơn 0."
+    if amount <= 0:
+        return False, "Số tiền đặt phải lớn hơn 0."
 
     bal = float(u["balance"])
     debt = float(u["debt"])
@@ -415,25 +410,29 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     opp_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
     win_u, lose_u = get_side_price(do, side_norm)
-    try:
-        calc = calc_bet_numbers(amount, win_u, lose_u)
-    except (TypeError, ValueError, OverflowError):
-        return False, "Tỷ lệ cược hoặc số tiền không hợp lệ. Vui lòng kiểm tra lại tỷ lệ của độ."
+    calc = calc_bet_numbers(amount, win_u, lose_u)
 
     hedge_room = max(0.0, opp_win_net_sum)
-    # Nếu cửa đối diện đã có lời ròng, cửa đang đặt chỉ được dùng tối đa
-    # đúng phần lời ròng đó. Không cộng thêm vốn chưa sử dụng vào hạn mức này.
-    # Khi chưa có đầu lời đối diện, cược đầu tiên dùng vốn chưa sử dụng.
-    allowed_budget = hedge_room if hedge_room > 1e-6 else unused_capital
+    same_side_principal = sum(
+        float(b["amount"]) for b in existing_bets if b["side"] == side_norm
+    )
+
+    if opp_win_net_sum > 0:
+        # Hạn mức là TỔNG cược của cửa hiện tại, không phải hạn mức riêng
+        # cho từng mã. Phải trừ các mã cùng cửa đã được nhận trước đó.
+        allowed_budget = max(0.0, hedge_room - same_side_principal)
+    else:
+        # Cửa mở cược đầu tiên: cho phép trong phạm vi vốn còn khả dụng.
+        allowed_budget = max(0.0, unused_capital)
 
     if amount > allowed_budget + 1e-6:
         return (
             False,
             f"❌ Vượt hạn mức cho phép của cửa {side_norm} ({do['name']})!\n"
             f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
-            f"• Hạn mức đánh qua cửa {side_norm} hiện tại: <b>{fmt_num(hedge_room)}</b>\n"
-            f"• Vốn chưa sử dụng: <b>{fmt_num(unused_capital)}</b>\n"
-            f"• Hạn mức tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
+            f"• Trần TỔNG cược cửa {side_norm}: <b>{fmt_num(hedge_room if opp_win_net_sum > 0 else unused_capital + same_side_principal)}</b>\n"
+            f"• Đã cược cửa {side_norm}: <b>{fmt_num(same_side_principal)}</b>\n"
+            f"• Còn được cược thêm: <b>{fmt_num(allowed_budget)}</b>",
         )
 
     other_dos_worst_loss = sum(
@@ -444,8 +443,6 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side_norm, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    # Trần rủi ro tổng của người chơi không được nhân đôi hoặc cộng lời
-    # từ cửa khác; chỉ được bằng sức chịu rủi ro thực tế của tài khoản.
     hard_risk_cap = max_capacity
     if total_worst_loss > hard_risk_cap + 1e-6:
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
@@ -484,9 +481,6 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
 
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
-    amount = float(amount)
-    if not math.isfinite(amount) or amount <= 0:
-        raise ValueError("Deposit amount must be a finite positive number")
     u = db.get_user(target_uid)
     new_balance = float(u["balance"]) + amount
     db.update_user_fields(target_uid, balance=new_balance)
@@ -501,13 +495,6 @@ def apply_deposit_logic(target_uid: int, amount: float) -> dict:
 def create_withdrawal_logic(
     user_id: int, amount: float, payout_text: str = "", qr_file_id: str = ""
 ) -> tuple[bool, str, dict | None]:
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        return False, "Số tiền rút không hợp lệ.", None
-    if not math.isfinite(amount) or amount <= 0:
-        return False, "Số tiền rút phải là số hữu hạn lớn hơn 0.", None
-
     u = db.get_user(user_id)
     bal = float(u["balance"])
 
@@ -602,11 +589,6 @@ def settle_single_do_no_reopen(do: dict, result: str) -> dict[int, float]:
 
 
 def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
-    result = str(result).upper()
-    if result not in ("XANH", "DO", "CANCEL", "DRAW"):
-        raise ValueError("Kết quả độ không hợp lệ")
-    if not do_ids:
-        raise ValueError("Chưa chọn độ cần chốt")
     settled_names: list[str] = []
     combined_net: dict[int, float] = {}
     per_do_net: dict[str, dict[int, float]] = {}
