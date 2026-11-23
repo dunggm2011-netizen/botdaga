@@ -17,6 +17,22 @@ def fmt_signed(val: float) -> str:
     return "⚪ <b>0</b>"
 
 
+def calc_fee_and_net_profit(gross_profit: float) -> dict:
+    """
+    Nguyên tắc khấu trừ 5%:
+    - Chỉ tính trên lợi nhuận trước khấu trừ.
+    - Khấu trừ = lợi nhuận * 5%, thực nhận = lợi nhuận * 95%.
+    """
+    profit = max(0.0, float(gross_profit))
+    fee_amount = profit * FEE_RATE
+    net_profit = profit - fee_amount
+    return {
+        "gross_profit": profit,
+        "fee_amount": fee_amount,
+        "net_profit": net_profit,
+    }
+
+
 def get_assigned_approver_id() -> int:
     raw = db.get_setting("assigned_approver_id", "0")
     return int(raw) if raw.isdigit() else 0
@@ -98,10 +114,12 @@ def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
     pay_u = lose_u if lose_u > 0 else 10.0
     lose_amount = amount
     win_gross = amount * (pay_u / base_u)
-    win_net = win_gross * (1.0 - FEE_RATE)
+    fee_info = calc_fee_and_net_profit(win_gross)
     return {
         "amount": amount,
-        "win_net": win_net,
+        "win_gross": win_gross,
+        "fee_amount": fee_info["fee_amount"],
+        "win_net": fee_info["net_profit"],
         "lose_amount": lose_amount,
     }
 
@@ -132,10 +150,6 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
 
 
 def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: list[dict]) -> float:
-    """
-    Nếu ở một độ khác khách có lời 2 đầu (pnl_if_xanh > 0 và pnl_if_do > 0),
-    lấy đầu ăn ít hơn min(pnl_if_xanh, pnl_if_do).
-    """
     bonus = 0.0
     for d in open_dos:
         if d["name"] == current_do_name:
@@ -158,10 +172,10 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Tính hạn mức cược cho từng cửa trên độ đang chọn:
-    - Bảo toàn phế 5% trên mọi đầu lời ròng.
-    - Đầu lời ròng cửa đối diện (sau 5% phế) được mở hạn mức đánh ngược qua cửa kia,
-      kết hợp với vốn dư còn lại và phần đệm 2 đầu từ độ khác.
+    Tính hạn mức từng cửa trên độ đang chọn:
+    - Tách riêng vốn đang khóa rủi ro (chưa quyết toán) và vốn chưa sử dụng.
+    - Đầu lời ròng cửa đối diện (sau 5% phế) được mở làm hạn mức đánh ngược qua cửa kia,
+      cộng thêm phần vốn chưa sử dụng và phần đệm 2 đầu từ độ khác.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
@@ -215,6 +229,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "all_open_bets": all_open_bets,
         "max_capacity": max_capacity,
         "total_open_principal": total_open_principal,
+        "locked_capital": locked_capital,
         "base_unused": base_unused,
         "edge_bonus": edge_bonus,
         "unused_capital": unused_capital,
@@ -226,23 +241,17 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
 
 
 def can_open_do_by_time(now_dt: datetime | None = None) -> tuple[bool, str]:
-    """
-    Chỉ cho phép mở độ từ 07:00 sáng trở đi (giờ Việt Nam UTC+7).
-    """
     current = now_dt.astimezone(VN_TZ) if now_dt else datetime.now(VN_TZ)
     if current.hour < 7:
         return (
             False,
-            f"⏰ Chưa tới giờ mở độ! Hệ thống chỉ mở độ từ <b>07:00</b> sáng "
+            f"⏰ Chưa tới giờ mở kỳ/độ! Hệ thống chỉ mở từ <b>07:00</b> sáng "
             f"(Hiện tại: <b>{current.strftime('%H:%M - %d/%m/%Y')}</b>).",
         )
     return True, ""
 
 
 def normalize_do_name(raw_do: str | int) -> str:
-    """
-    Chuẩn hóa số hoặc tên độ thành 'Độ X' (ví dụ '3' -> 'Độ 3', '5' -> 'Độ 5').
-    """
     s = str(raw_do).strip()
     if s.isdigit():
         return f"Độ {int(s)}"
@@ -317,11 +326,6 @@ def open_specific_do_logic(
     do_lose: float = 10.0,
     exclusive_active: bool = True,
 ) -> tuple[bool, str, dict | None]:
-    """
-    Mở một độ tùy ý (Độ 3 trước, Độ 2 sau, Độ 5...) từ 07:00 sáng.
-    Khi exclusive_active=True: chuyển các độ OPEN khác sang 'HOLD' để
-    mở độ nào thì khách chỉ được đánh độ đó, tránh đánh nhầm độ dời lịch/hoãn.
-    """
     ok_time, time_msg = can_open_do_by_time()
     if not ok_time:
         return False, time_msg, None
