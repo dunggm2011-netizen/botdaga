@@ -159,9 +159,9 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
     Tính hạn mức cược cho từng cửa trên độ đang chọn:
-    - Vốn khả dụng = max_capacity - tổng tiền gốc đang mở + phần đệm 2 đầu từ độ khác.
-    - Đánh cửa nào thì được dùng vốn khả dụng + đầu lời ròng (sau 5% phế) của cửa đối diện
-      trên độ hiện tại (trừ phần vốn gốc đã dùng cho cùng cửa đó).
+    - Bảo toàn phế 5% trên mọi đầu lời ròng.
+    - Đầu lời ròng cửa đối diện (sau 5% phế) được mở hạn mức đánh ngược qua cửa kia,
+      kết hợp với vốn dư còn lại và phần đệm 2 đầu từ độ khác.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
@@ -180,26 +180,29 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     for d in open_dos:
         all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
 
+    existing_bets = [b for b in all_open_bets if do and b["do_name"] == do["name"]]
+    other_bets = [b for b in all_open_bets if not do or b["do_name"] != do["name"]]
+
+    xanh_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "XANH")
+    do_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "DO")
+    xanh_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "XANH")
+    do_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "DO")
+
+    loss_if_xanh = max(0.0, -(xanh_win_net_sum - do_lose_sum))
+    loss_if_do = max(0.0, -(do_win_net_sum - xanh_lose_sum))
+    cur_do_locked_capital = max(loss_if_xanh, loss_if_do)
+
+    other_principal = sum(float(b["amount"]) for b in other_bets)
     total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
-    base_unused = max(0.0, max_capacity - total_open_principal)
+
+    locked_capital = other_principal + cur_do_locked_capital
+    base_unused = max(0.0, max_capacity - locked_capital)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"] if do else "", open_dos)
     unused_capital = max(0.0, base_unused + edge_bonus)
 
-    existing_bets = [b for b in all_open_bets if do and b["do_name"] == do["name"]]
-    xanh_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "XANH")
-    do_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "DO")
-    xanh_amt_sum = sum(float(b["amount"]) for b in existing_bets if b["side"] == "XANH")
-    do_amt_sum = sum(float(b["amount"]) for b in existing_bets if b["side"] == "DO")
-
     def _side_max(target_side: str) -> tuple[float, float]:
-        if target_side == "XANH":
-            opp_win_net = do_win_net_sum
-            same_amt = xanh_amt_sum
-        else:
-            opp_win_net = xanh_win_net_sum
-            same_amt = do_amt_sum
-
-        hedge_room = max(0.0, opp_win_net - same_amt)
+        opp_win_net = do_win_net_sum if target_side == "XANH" else xanh_win_net_sum
+        hedge_room = max(0.0, opp_win_net)
         return opp_win_net, max(0.0, hedge_room + unused_capital)
 
     xanh_opp_win, max_xanh = _side_max("XANH")
@@ -385,12 +388,10 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     opp_side = "XANH" if side_norm == "DO" else "DO"
 
     opp_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
-    same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side_norm)
-
     win_u, lose_u = get_side_price(do, side_norm)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    hedge_room = max(0.0, opp_win_net_sum - same_principal)
+    hedge_room = max(0.0, opp_win_net_sum)
     allowed_budget = hedge_room + unused_capital
 
     if amount > allowed_budget + 1e-6:
@@ -410,7 +411,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side_norm, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    hard_risk_cap = max_capacity * 2.0 + edge_bonus
+    hard_risk_cap = max_capacity * 2.0 + edge_bonus + opp_win_net_sum
     if total_worst_loss > hard_risk_cap + 1e-6:
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
