@@ -109,19 +109,19 @@ def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
 def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = None) -> float:
     bets = db.get_active_bets(do_name=do_name, user_id=user_id)
 
-    xanh_win_net = sum(b["win_net"] for b in bets if b["side"] == "XANH")
-    xanh_lose = sum(b["lose_amount"] for b in bets if b["side"] == "XANH")
+    xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
+    xanh_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH")
 
-    do_win_net = sum(b["win_net"] for b in bets if b["side"] == "DO")
-    do_lose = sum(b["lose_amount"] for b in bets if b["side"] == "DO")
+    do_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "DO")
+    do_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "DO")
 
     if extra_bet:
         if extra_bet["side"] == "XANH":
-            xanh_win_net += extra_bet["win_net"]
-            xanh_lose += extra_bet["lose_amount"]
+            xanh_win_net += float(extra_bet["win_net"])
+            xanh_lose += float(extra_bet["lose_amount"])
         else:
-            do_win_net += extra_bet["win_net"]
-            do_lose += extra_bet["lose_amount"]
+            do_win_net += float(extra_bet["win_net"])
+            do_lose += float(extra_bet["lose_amount"])
 
     pnl_if_xanh = xanh_win_net - do_lose
     pnl_if_do = do_win_net - xanh_lose
@@ -133,10 +133,8 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
 
 def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: list[dict]) -> float:
     """
-    Tính phần cộng thêm từ các độ mở khác:
-    - Nếu ở một độ khác khách có lời 2 đầu (pnl_if_xanh > 0 và pnl_if_do > 0),
-      lấy đầu ăn ít hơn min(pnl_if_xanh, pnl_if_do).
-    - Nếu 1 bên ăn và 1 bên hòa (0), đầu ăn ít hơn là 0 -> cộng 0.
+    Nếu ở một độ khác khách có lời 2 đầu (pnl_if_xanh > 0 và pnl_if_do > 0),
+    lấy đầu ăn ít hơn min(pnl_if_xanh, pnl_if_do).
     """
     bonus = 0.0
     for d in open_dos:
@@ -161,12 +159,12 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
     Tính hạn mức cược cho từng cửa trên độ đang chọn:
-    - Bảo toàn phế 5% trên mọi đầu lời ròng.
-    - Đầu lời ròng cửa đối diện (ví dụ ĐỎ có 9.025.000) được mở hạn mức đánh ngược qua cửa kia,
-      kết hợp với vốn khả dụng còn lại và trần rủi ro tối đa của tài khoản.
+    - Vốn khả dụng = max_capacity - tổng tiền gốc đang mở + phần đệm 2 đầu từ độ khác.
+    - Đánh cửa nào thì được dùng vốn khả dụng + đầu lời ròng (sau 5% phế) của cửa đối diện
+      trên độ hiện tại (trừ phần vốn gốc đã dùng cho cùng cửa đó).
     """
     u = db.get_user(user_id)
-    open_dos = [d for d in db.get_open_dos() if d["status"] == "OPEN"]
+    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
     if do_id:
         do = db.get_do_by_id(do_id)
     else:
@@ -185,43 +183,24 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
     base_unused = max(0.0, max_capacity - total_open_principal)
     edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"] if do else "", open_dos)
+    unused_capital = max(0.0, base_unused + edge_bonus)
 
     existing_bets = [b for b in all_open_bets if do and b["do_name"] == do["name"]]
-    unused_capital = base_unused + edge_bonus
-
     xanh_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "XANH")
     do_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "DO")
-
-    other_dos_worst_loss = sum(
-        max_worst_case_loss(user_id, d["name"])
-        for d in open_dos
-        if do and d["name"] != do["name"]
-    )
-    hard_risk_cap = max_capacity * 2.0 + edge_bonus
-    remain_risk_room = max(0.0, hard_risk_cap - other_dos_worst_loss)
+    xanh_amt_sum = sum(float(b["amount"]) for b in existing_bets if b["side"] == "XANH")
+    do_amt_sum = sum(float(b["amount"]) for b in existing_bets if b["side"] == "DO")
 
     def _side_max(target_side: str) -> tuple[float, float]:
-        if not do:
-            return 0.0, max(0.0, unused_capital)
-        opp_win_net = do_win_net_sum if target_side == "XANH" else xanh_win_net_sum
-        win_u, lose_u = get_side_price(do, target_side)
-
-        # Giới hạn theo vốn dư + đầu lời ròng cửa đối diện
-        raw_cap = max(0.0, opp_win_net + unused_capital)
-
-        # Giới hạn thêm theo trần rủi ro nếu đánh 1 mã lớn vào cửa này
-        cur_worst = max_worst_case_loss(user_id, do["name"])
-        extra_risk_room = max(0.0, remain_risk_room - cur_worst)
         if target_side == "XANH":
-            # Nếu XANH thua hoặc ĐỎ thắng, thua mất thêm tiền gốc mã này (hoặc theo lose_u)
-            loss_per_unit = (lose_u / win_u) if win_u > 0 else 1.0
-            risk_cap_amt = extra_risk_room / max(1.0, loss_per_unit)
+            opp_win_net = do_win_net_sum
+            same_amt = xanh_amt_sum
         else:
-            loss_per_unit = (lose_u / win_u) if win_u > 0 else 1.0
-            risk_cap_amt = extra_risk_room / max(1.0, loss_per_unit)
+            opp_win_net = xanh_win_net_sum
+            same_amt = do_amt_sum
 
-        final_max = max(0.0, min(raw_cap, max(raw_cap, risk_cap_amt)) if remain_risk_room > 0 else 0.0)
-        return opp_win_net, final_max
+        hedge_room = max(0.0, opp_win_net - same_amt)
+        return opp_win_net, max(0.0, hedge_room + unused_capital)
 
     xanh_opp_win, max_xanh = _side_max("XANH")
     do_opp_win, max_do = _side_max("DO")
@@ -243,19 +222,152 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     }
 
 
+def can_open_do_by_time(now_dt: datetime | None = None) -> tuple[bool, str]:
+    """
+    Chỉ cho phép mở độ từ 07:00 sáng trở đi (giờ Việt Nam UTC+7).
+    """
+    current = now_dt.astimezone(VN_TZ) if now_dt else datetime.now(VN_TZ)
+    if current.hour < 7:
+        return (
+            False,
+            f"⏰ Chưa tới giờ mở độ! Hệ thống chỉ mở độ từ <b>07:00</b> sáng "
+            f"(Hiện tại: <b>{current.strftime('%H:%M - %d/%m/%Y')}</b>).",
+        )
+    return True, ""
+
+
+def normalize_do_name(raw_do: str | int) -> str:
+    """
+    Chuẩn hóa số hoặc tên độ thành 'Độ X' (ví dụ '3' -> 'Độ 3', '5' -> 'Độ 5').
+    """
+    s = str(raw_do).strip()
+    if s.isdigit():
+        return f"Độ {int(s)}"
+    low = s.lower()
+    if low.startswith("độ"):
+        tail = s[2:].strip()
+        if tail.isdigit():
+            return f"Độ {int(tail)}"
+        return f"Độ {tail}".strip()
+    return s
+
+
+def _get_or_create_do_record(
+    do_name: str,
+    xanh_win: float,
+    xanh_lose: float,
+    do_win: float,
+    do_lose: float,
+) -> dict | None:
+    existing = None
+    if hasattr(db, "get_do_by_name"):
+        existing = db.get_do_by_name(do_name)
+    else:
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM dos WHERE name = ? ORDER BY id DESC LIMIT 1",
+                (do_name,),
+            ).fetchone()
+            if row:
+                existing = dict(row)
+
+    if existing:
+        db.update_do(
+            int(existing["id"]),
+            status="OPEN",
+            xanh_win=xanh_win,
+            xanh_lose=xanh_lose,
+            do_win=do_win,
+            do_lose=do_lose,
+        )
+        return db.get_do_by_id(int(existing["id"]))
+
+    if hasattr(db, "create_do"):
+        new_id = db.create_do(
+            name=do_name,
+            xanh_win=xanh_win,
+            xanh_lose=xanh_lose,
+            do_win=do_win,
+            do_lose=do_lose,
+            status="OPEN",
+        )
+        return db.get_do_by_id(int(new_id))
+
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO dos (name, xanh_win, xanh_lose, do_win, do_lose, status, bet_seq)
+            VALUES (?, ?, ?, ?, ?, 'OPEN', 1)
+            """,
+            (do_name, xanh_win, xanh_lose, do_win, do_lose),
+        )
+        conn.commit()
+        new_id = cur.lastrowid
+    return db.get_do_by_id(int(new_id))
+
+
+def open_specific_do_logic(
+    raw_do: str | int,
+    xanh_win: float = 10.0,
+    xanh_lose: float = 10.0,
+    do_win: float = 10.0,
+    do_lose: float = 10.0,
+    exclusive_active: bool = True,
+) -> tuple[bool, str, dict | None]:
+    """
+    Mở một độ tùy ý (Độ 3 trước, Độ 2 sau, Độ 5...) từ 07:00 sáng.
+    Khi exclusive_active=True: chuyển các độ OPEN khác sang 'HOLD' để
+    mở độ nào thì khách chỉ được đánh độ đó, tránh đánh nhầm độ dời lịch/hoãn.
+    """
+    ok_time, time_msg = can_open_do_by_time()
+    if not ok_time:
+        return False, time_msg, None
+
+    do_name = normalize_do_name(raw_do)
+    if not do_name or do_name == "Độ":
+        return False, "❌ Số hoặc tên độ không hợp lệ (ví dụ nhập <code>3</code> hoặc <code>Độ 3</code>).", None
+
+    held_names: list[str] = []
+    if exclusive_active:
+        for d in db.get_open_dos():
+            if d.get("status") == "OPEN" and d.get("name") != do_name:
+                db.update_do(int(d["id"]), status="HOLD")
+                held_names.append(str(d["name"]))
+
+    do_rec = _get_or_create_do_record(
+        do_name=do_name,
+        xanh_win=xanh_win,
+        xanh_lose=xanh_lose,
+        do_win=do_win,
+        do_lose=do_lose,
+    )
+    if not do_rec:
+        return False, f"❌ Không thể mở <b>{do_name}</b>.", None
+
+    msg = (
+        f"✅ <b>ĐÃ MỞ {do_name.upper()}</b> "
+        f"(XANH <code>{xanh_win:g}/{xanh_lose:g}</code> | ĐỎ <code>{do_win:g}/{do_lose:g}</code>).\n"
+        f"• Hiện chỉ nhận cược cho <b>{do_name}</b> để tránh đánh nhầm độ."
+    )
+    if held_names:
+        msg += f"\n• Đã chuyển sang trạng thái chờ/hoãn: <b>{', '.join(held_names)}</b>."
+
+    return True, msg, do_rec
+
+
 def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = None) -> tuple[bool, str]:
     side_norm = side.upper()
     if side_norm not in ("XANH", "DO"):
         return False, "Cửa đặt không hợp lệ."
 
     u = db.get_user(user_id)
-    open_dos = [d for d in db.get_open_dos() if d["status"] == "OPEN"]
+    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
     if do_id:
         do = db.get_do_by_id(do_id)
     else:
         do = open_dos[-1] if open_dos else None
 
-    if not do or do["status"] != "OPEN":
+    if not do or do.get("status") != "OPEN":
         return False, "Độ này hiện đang tạm hoãn, khóa hoặc đã chốt."
     if amount <= 0:
         return False, "Số tiền đặt phải lớn hơn 0."
@@ -272,19 +384,21 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
     opp_side = "XANH" if side_norm == "DO" else "DO"
 
-    opp_streak_win_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    opp_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    same_principal = sum(float(b["amount"]) for b in existing_bets if b["side"] == side_norm)
+
     win_u, lose_u = get_side_price(do, side_norm)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    opp_hedge_allow = max(0.0, opp_streak_win_net)
-    allowed_budget = opp_hedge_allow + unused_capital
+    hedge_room = max(0.0, opp_win_net_sum - same_principal)
+    allowed_budget = hedge_room + unused_capital
 
     if amount > allowed_budget + 1e-6:
         return (
             False,
             f"❌ Vượt hạn mức cho phép của cửa {side_norm} ({do['name']})!\n"
-            f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_streak_win_net)}</b>\n"
-            f"• Hạn mức đánh qua cửa {side_norm} hiện tại: <b>{fmt_num(opp_hedge_allow)}</b>\n"
+            f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
+            f"• Hạn mức đánh qua cửa {side_norm} hiện tại: <b>{fmt_num(hedge_room)}</b>\n"
             f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
         )
 
@@ -448,7 +562,7 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
 
     for d_id in do_ids:
         do = db.get_do_by_id(d_id)
-        if not do or do["status"] != "OPEN":
+        if not do or do.get("status") != "OPEN":
             continue
         d_name = do["name"]
         settled_names.append(d_name)
@@ -527,7 +641,7 @@ def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict
 
 
 def build_live_report_text() -> str:
-    open_dos = [d for d in db.get_open_dos() if d["status"] == "OPEN"]
+    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
     if not open_dos:
         return "<b>THỐNG KÊ CÁC ĐỘ ĐANG MỞ</b>\n\n<i>Hiện không có độ nào đang mở.</i>"
 
