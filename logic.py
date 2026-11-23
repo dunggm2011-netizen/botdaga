@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+from math import isfinite
 from config import FEE_RATE, MASTER_IDS, MIN_WITHDRAW_AMOUNT
 import database as db
 
@@ -172,13 +173,19 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Tính hạn mức từng cửa trên độ đang chọn:
-    - Tách riêng vốn đang khóa rủi ro (chưa quyết toán) và vốn chưa sử dụng.
-    - Đầu lời ròng cửa đối diện (sau 5% phế) được mở làm hạn mức đánh ngược qua cửa kia,
-      cộng thêm phần vốn chưa sử dụng và phần đệm 2 đầu từ độ khác.
+    Hạn mức dựa trên khả năng thanh toán thực tế:
+    - Chỉ độ OPEN mới được nhận cược; độ HOLD vẫn được tính là khoản rủi ro đang treo.
+    - Rủi ro của mỗi độ là khoản lỗ lớn nhất trong các kết quả có thể xảy ra.
+    - Không lấy khoản lời chưa quyết toán ở độ khác làm vốn khả dụng.
+    - Ở độ đang cược, lời ròng của cửa đối diện có thể dùng để bù rủi ro khi đánh cửa còn lại.
     """
     u = db.get_user(user_id)
-    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
+    active_dos = [
+        d for d in db.get_open_dos()
+        if d.get("status") in ("OPEN", "HOLD")
+    ]
+    open_dos = [d for d in active_dos if d.get("status") == "OPEN"]
+
     if do_id:
         do = db.get_do_by_id(do_id)
     else:
@@ -188,31 +195,51 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     debt = float(u["debt"])
     debt_limit = float(u["debt_limit"])
     remaining_debt_room = max(0.0, debt_limit - debt)
-    max_capacity = bal + remaining_debt_room
+    max_capacity = max(0.0, bal + remaining_debt_room)
 
-    all_open_bets: list[dict] = []
-    for d in open_dos:
-        all_open_bets.extend(db.get_active_bets(do_name=d["name"], user_id=user_id))
+    all_active_bets: list[dict] = []
+    for d in active_dos:
+        all_active_bets.extend(
+            db.get_active_bets(do_name=d["name"], user_id=user_id)
+        )
 
-    existing_bets = [b for b in all_open_bets if do and b["do_name"] == do["name"]]
-    other_bets = [b for b in all_open_bets if not do or b["do_name"] != do["name"]]
+    existing_bets = [
+        b for b in all_active_bets
+        if do and b["do_name"] == do["name"]
+    ]
+    other_bets = [
+        b for b in all_active_bets
+        if not do or b["do_name"] != do["name"]
+    ]
 
-    xanh_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "XANH")
-    do_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "DO")
-    xanh_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "XANH")
-    do_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "DO")
+    xanh_win_net_sum = sum(
+        float(b["win_net"]) for b in existing_bets if b["side"] == "XANH"
+    )
+    do_win_net_sum = sum(
+        float(b["win_net"]) for b in existing_bets if b["side"] == "DO"
+    )
+    xanh_lose_sum = sum(
+        float(b["lose_amount"]) for b in existing_bets if b["side"] == "XANH"
+    )
+    do_lose_sum = sum(
+        float(b["lose_amount"]) for b in existing_bets if b["side"] == "DO"
+    )
 
-    loss_if_xanh = max(0.0, -(xanh_win_net_sum - do_lose_sum))
-    loss_if_do = max(0.0, -(do_win_net_sum - xanh_lose_sum))
+    loss_if_xanh = max(0.0, do_lose_sum - xanh_win_net_sum)
+    loss_if_do = max(0.0, xanh_lose_sum - do_win_net_sum)
     cur_do_locked_capital = max(loss_if_xanh, loss_if_do)
 
-    other_principal = sum(float(b["amount"]) for b in other_bets)
-    total_open_principal = sum(float(b["amount"]) for b in all_open_bets)
+    other_locked_risk = 0.0
+    for d in active_dos:
+        if do and d["name"] == do["name"]:
+            continue
+        other_locked_risk += max_worst_case_loss(user_id, d["name"])
 
-    locked_capital = other_principal + cur_do_locked_capital
-    base_unused = max(0.0, max_capacity - locked_capital)
-    edge_bonus = _calc_other_dos_edge_bonus(user_id, do["name"] if do else "", open_dos)
-    unused_capital = max(0.0, base_unused + edge_bonus)
+    locked_capital = other_locked_risk + cur_do_locked_capital
+    unused_capital = max(0.0, max_capacity - locked_capital)
+
+    # Không cộng lãi chưa chốt từ độ khác vào hạn mức.
+    edge_bonus = 0.0
 
     def _side_max(target_side: str) -> tuple[float, float]:
         opp_win_net = do_win_net_sum if target_side == "XANH" else xanh_win_net_sum
@@ -222,15 +249,17 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     xanh_opp_win, max_xanh = _side_max("XANH")
     do_opp_win, max_do = _side_max("DO")
 
+    total_open_principal = sum(float(b["amount"]) for b in all_active_bets)
+
     return {
         "user": u,
         "do": do,
         "open_dos": open_dos,
-        "all_open_bets": all_open_bets,
+        "all_open_bets": all_active_bets,
         "max_capacity": max_capacity,
         "total_open_principal": total_open_principal,
         "locked_capital": locked_capital,
-        "base_unused": base_unused,
+        "base_unused": unused_capital,
         "edge_bonus": edge_bonus,
         "unused_capital": unused_capital,
         "xanh_opp_win": xanh_opp_win,
@@ -283,7 +312,7 @@ def _get_or_create_do_record(
             if row:
                 existing = dict(row)
 
-    if existing:
+    if existing and existing.get("status") in ("OPEN", "HOLD"):
         db.update_do(
             int(existing["id"]),
             status="OPEN",
@@ -293,6 +322,8 @@ def _get_or_create_do_record(
             do_lose=do_lose,
         )
         return db.get_do_by_id(int(existing["id"]))
+
+    # Nếu bản ghi cùng tên đã CLOSED, tạo bản ghi mới để giữ nguyên lịch sử.
 
     if hasattr(db, "create_do"):
         new_id = db.create_do(
@@ -376,8 +407,8 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     if not do or do.get("status") != "OPEN":
         return False, "Độ này hiện đang tạm hoãn, khóa hoặc đã chốt."
-    if amount <= 0:
-        return False, "Số tiền đặt phải lớn hơn 0."
+    if not isfinite(float(amount)) or amount <= 0:
+        return False, "Số tiền đặt phải là số hữu hạn lớn hơn 0."
 
     bal = float(u["balance"])
     debt = float(u["debt"])
@@ -407,15 +438,19 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
             f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
         )
 
+    risk_active_dos = [
+        d for d in db.get_open_dos()
+        if d.get("status") in ("OPEN", "HOLD")
+    ]
     other_dos_worst_loss = sum(
         max_worst_case_loss(user_id, d["name"])
-        for d in open_dos
+        for d in risk_active_dos
         if d["name"] != do["name"]
     )
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side_norm, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    hard_risk_cap = max_capacity * 2.0 + edge_bonus + opp_win_net_sum
+    hard_risk_cap = max_capacity
     if total_worst_loss > hard_risk_cap + 1e-6:
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
@@ -453,6 +488,8 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
 
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
+    if not isfinite(float(amount)) or amount <= 0:
+        raise ValueError("Số tiền nạp phải là số hữu hạn lớn hơn 0.")
     u = db.get_user(target_uid)
     new_balance = float(u["balance"]) + amount
     db.update_user_fields(target_uid, balance=new_balance)
@@ -467,6 +504,9 @@ def apply_deposit_logic(target_uid: int, amount: float) -> dict:
 def create_withdrawal_logic(
     user_id: int, amount: float, payout_text: str = "", qr_file_id: str = ""
 ) -> tuple[bool, str, dict | None]:
+    if not isfinite(float(amount)) or amount <= 0:
+        return False, "❌ Số tiền rút phải lớn hơn 0.", None
+
     u = db.get_user(user_id)
     bal = float(u["balance"])
 
