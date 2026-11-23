@@ -8,45 +8,6 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
-def _migrate_bets_table(conn: sqlite3.Connection) -> None:
-    """
-    Migration: nếu bảng bets cũ có cột win_net → đổi sang win_gross.
-    Chạy an toàn nhiều lần.
-    """
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(bets)")
-    cols = {row[1] for row in cur.fetchall()}
-    if "win_net" in cols and "win_gross" not in cols:
-        # SQLite >= 3.25 hỗ trợ RENAME COLUMN
-        try:
-            cur.execute("ALTER TABLE bets RENAME COLUMN win_net TO win_gross")
-            conn.commit()
-        except sqlite3.OperationalError:
-            # Fallback: tạo bảng mới, copy dữ liệu
-            cur.execute("""
-                CREATE TABLE bets_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL,
-                    do_name TEXT NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    side TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    win_gross REAL NOT NULL,
-                    lose_amount REAL NOT NULL,
-                    price_str TEXT NOT NULL,
-                    status TEXT DEFAULT 'ACTIVE'
-                )
-            """)
-            cur.execute("""
-                INSERT INTO bets_new (id, code, do_name, user_id, side, amount, win_gross, lose_amount, price_str, status)
-                SELECT id, code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status
-                FROM bets
-            """)
-            cur.execute("DROP TABLE bets")
-            cur.execute("ALTER TABLE bets_new RENAME TO bets")
-            conn.commit()
-
-
 def init_db() -> None:
     with get_conn() as conn:
         cur = conn.cursor()
@@ -77,7 +38,6 @@ def init_db() -> None:
             )
         """)
 
-        # Bảng bets dùng win_gross (chưa phế)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,15 +46,12 @@ def init_db() -> None:
                 user_id INTEGER NOT NULL,
                 side TEXT NOT NULL,
                 amount REAL NOT NULL,
-                win_gross REAL NOT NULL,
+                win_net REAL NOT NULL,
                 lose_amount REAL NOT NULL,
                 price_str TEXT NOT NULL,
                 status TEXT DEFAULT 'ACTIVE'
             )
         """)
-
-        # Migration cho DB cũ (nếu có win_net)
-        _migrate_bets_table(conn)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS withdrawals (
@@ -306,17 +263,17 @@ def add_bet_record(
     user_id: int,
     side: str,
     amount: float,
-    win_gross: float,     # ĐỔI: win_net → win_gross
+    win_net: float,      # GIỮ win_net
     lose_amount: float,
     price_str: str,
 ) -> None:
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO bets (code, do_name, user_id, side, amount, win_gross, lose_amount, price_str, status)
+            INSERT INTO bets (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
             """,
-            (code, do_name, user_id, side, amount, win_gross, lose_amount, price_str),
+            (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
         )
         conn.commit()
 
