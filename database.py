@@ -205,18 +205,13 @@ def get_do_by_name(name: str) -> dict | None:
 
 def get_open_dos() -> list[dict]:
     with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_unsettled_dos() -> list[dict]:
+    with get_conn() as conn:
         rows = conn.execute("SELECT * FROM dos WHERE status IN ('OPEN', 'HOLD') ORDER BY id ASC").fetchall()
-        if not rows:
-            next_name = get_next_do_name()
-            conn.execute(
-                """
-                INSERT INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-                VALUES (?, 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
-                """,
-                (next_name,),
-            )
-            conn.commit()
-            rows = conn.execute("SELECT * FROM dos WHERE status IN ('OPEN', 'HOLD') ORDER BY id ASC").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -228,6 +223,9 @@ def create_new_do(
     do_lose: float = 10.0,
 ) -> dict:
     do_name = name or get_next_do_name()
+    existing = get_do_by_name(do_name)
+    if existing and existing["status"] == "CLOSED":
+        raise ValueError("Äá» ÄÃ£ chá»t khÃ´ng thá» má» láº¡i")
     with get_conn() as conn:
         conn.execute(
             """
@@ -257,6 +255,23 @@ def update_do(do_id: int, **kwargs) -> None:
         conn.commit()
 
 
+def add_bet_and_advance_seq(do_id: int, expected_seq: int, code: str,
+                            do_name: str, user_id: int, side: str,
+                            amount: float, win_net: float, lose_amount: float,
+                            price_str: str) -> None:
+    """LÆ°u mÃ£ cÆ°á»£c vÃ  tÄng sá» thá»© tá»± trong cÃ¹ng má»t giao dá»ch."""
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        do = conn.execute("SELECT status, bet_seq FROM dos WHERE id=? AND name=?", (do_id, do_name)).fetchone()
+        if not do or do["status"] != "OPEN" or int(do["bet_seq"]) != expected_seq:
+            raise ValueError("Äá» hoáº·c sá» thá»© tá»± ÄÃ£ thay Äá»i; hÃ£y thá»­ láº¡i")
+        conn.execute("""INSERT INTO bets (code, do_name, user_id, side, amount,
+                       win_net, lose_amount, price_str, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')""",
+                     (code, do_name, user_id, side, amount, win_net, lose_amount, price_str))
+        conn.execute("UPDATE dos SET bet_seq=? WHERE id=?", (expected_seq + 1, do_id))
+
+
 def add_bet_record(
     code: str,
     do_name: str,
@@ -276,24 +291,6 @@ def add_bet_record(
             (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
         )
         conn.commit()
-
-
-def add_bet_with_sequence(do_id: int, user_id: int, side: str, amount: float,
-                          win_net: float, lose_amount: float, price_str: str) -> str:
-    """Atomic code allocation + insert; does not replace risk-limit locking."""
-    with get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT name, status, bet_seq FROM dos WHERE id = ?", (do_id,)).fetchone()
-        if row is None or row["status"] != "OPEN":
-            raise ValueError("Äá» khÃ´ng cÃ²n má» Äá» nháº­n cÆ°á»£c")
-        seq = int(row["bet_seq"])
-        code = f"#M{seq:02d}"
-        conn.execute("""INSERT INTO bets (code, do_name, user_id, side, amount, win_net,
-                      lose_amount, price_str, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')""",
-                     (code, row["name"], user_id, side, amount, win_net, lose_amount, price_str))
-        conn.execute("UPDATE dos SET bet_seq = ? WHERE id = ?", (seq + 1, do_id))
-        conn.commit()
-        return code
 
 
 def get_active_bets(do_name: str | None = None, user_id: int | None = None) -> list[dict]:
