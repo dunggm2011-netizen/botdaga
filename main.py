@@ -31,6 +31,9 @@ from logic import (
     can_approve_item,
     parse_price_input,
     parse_single_side_ratio,
+    get_user_betting_limit_info,
+    can_open_do_by_time,
+    open_specific_do_logic,
     place_bet_logic,
     apply_deposit_logic,
     create_withdrawal_logic,
@@ -264,6 +267,17 @@ def kb_price_side_picker(do_target: str) -> types.InlineKeyboardMarkup:
     return kb
 
 
+def kb_open_do_picker() -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    btns = [
+        types.InlineKeyboardButton(f"Độ {i}", callback_data=f"a_open_num_{i}")
+        for i in range(1, 9)
+    ]
+    kb.add(*btns)
+    kb.add(types.InlineKeyboardButton("✍️ Nhập số độ khác", callback_data="a_open_custom"))
+    return kb
+
+
 def kb_multi_close_picker(selected_ids: set[int]) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     for d in db.get_open_dos():
@@ -345,10 +359,13 @@ def open_bet_amount_menu(chat_id: int, uid: int, u: dict, side: str, do_id: int)
         return
     win_u = float(do["xanh_win"] if side == "XANH" else do["do_win"])
     lose_u = float(do["xanh_lose"] if side == "XANH" else do["do_lose"])
+    lim = get_user_betting_limit_info(uid, do_id=do_id)
+    max_side = lim["max_xanh"] if side == "XANH" else lim["max_do"]
     side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
     txt = (
         f"<b>{do['name']} — CỬA {side_label}</b>\n"
         f"• Giá hiện tại: <b>{win_u:g}/{lose_u:g}</b> <i>(trừ 5% phế trên tiền lời)</i>\n"
+        f"• Hạn mức tối đa cửa {side_label}: <b>{fmt_num(max_side)}</b>\n"
         f"• Ví: <b>{fmt_num(float(u['balance']))}</b> | Nợ: <b>{fmt_num(float(u['debt']))}/{fmt_num(float(u['debt_limit']))}</b>\n\n"
         f"Chọn mức tiền nhanh hoặc bấm <b>Nhập số khác</b>:"
     )
@@ -495,6 +512,7 @@ def on_callback(call: types.CallbackQuery):
         )
 
     elif data == "u_wallet":
+        lim = get_user_betting_limit_info(uid)
         active_bets = []
         for d in open_dos:
             active_bets.extend(db.get_active_bets(do_name=d["name"], user_id=uid))
@@ -504,10 +522,30 @@ def on_callback(call: types.CallbackQuery):
                 for b in active_bets
             ]
         ) or "  <i>Chưa có mã nào đang chạy.</i>"
+
+        if not open_dos:
+            limit_line = f"• Hạn mức còn cược được: <b>{fmt_num(lim['unused_capital'])}</b>"
+        elif len(open_dos) == 1:
+            d0 = open_dos[0]
+            d_lim = get_user_betting_limit_info(uid, do_id=int(d0["id"]))
+            limit_line = (
+                f"• Hạn mức còn cược được ({d0['name']}): "
+                f"🟢 XANH <b>{fmt_num(d_lim['max_xanh'])}</b> | 🔴 ĐỎ <b>{fmt_num(d_lim['max_do'])}</b>"
+            )
+        else:
+            sub_lines = []
+            for d in open_dos:
+                d_lim = get_user_betting_limit_info(uid, do_id=int(d["id"]))
+                sub_lines.append(
+                    f"  - {d['name']}: 🟢 XANH <b>{fmt_num(d_lim['max_xanh'])}</b> | 🔴 ĐỎ <b>{fmt_num(d_lim['max_do'])}</b>"
+                )
+            limit_line = "• Hạn mức còn cược được theo từng độ:\n" + "\n".join(sub_lines)
+
         txt = (
             f"<b>TÀI KHOẢN CỦA BẠN</b> (ID: <code>{uid}</code>)\n"
             f"• Số dư ví: <b>{fmt_num(float(u['balance']))}</b>\n"
             f"• Đang ghi nợ: <b>{fmt_num(float(u['debt']))}</b> / Hạn mức <b>{fmt_num(float(u['debt_limit']))}</b>\n"
+            f"{limit_line}\n"
             f"• Ăn/thua tới hiện tại: {fmt_signed(float(u['pnl_net']))}\n\n"
             f"<b>Mã đang đánh:</b>\n{bets_txt}"
         )
@@ -639,7 +677,9 @@ def on_callback(call: types.CallbackQuery):
 
     elif data.startswith("u_side_"):
         side = data.split("_")[2]
-        if len(open_dos) > 1:
+        if not open_dos:
+            bot.send_message(chat_id, "⚠️ Hiện chưa có độ nào đang mở.", reply_markup=kb_user_main(uid))
+        elif len(open_dos) > 1:
             side_label = "🟢 XANH" if side == "XANH" else "🔴 ĐỎ"
             summary_lines = []
             for d in open_dos:
@@ -702,16 +742,34 @@ def on_callback(call: types.CallbackQuery):
         bot.send_message(chat_id, "<b>MENU ADMIN (CHAT RIÊNG)</b>", reply_markup=kb_full_admin_panel())
 
     elif data == "a_new_do":
-        created = db.create_new_do()
+        ok_time, time_msg = can_open_do_by_time()
+        if not ok_time:
+            bot.send_message(chat_id, time_msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
+            return
+        PENDING_STATE[uid] = {"action": "ADMIN_OPEN_SPECIFIC_DO"}
         bot.send_message(
             chat_id,
-            f"✅ Đã mở thêm <b>{created['name']}</b> (XANH <code>{float(created['xanh_win']):g}/{float(created['xanh_lose']):g}</code> | "
-            f"ĐỎ <code>{float(created['do_win']):g}/{float(created['do_lose']):g}</code>).",
-            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
+            "🎯 <b>CHỌN HOẶC NHẬP SỐ ĐỘ MUỐN MỞ</b>\n"
+            "• Hỗ trợ mở ngẫu nhiên theo thực tế dời lịch (ví dụ mở <b>Độ 3</b> trước, <b>Độ 2</b> sau, hoặc <b>Độ 5</b>).\n"
+            "• Mở độ nào hệ thống sẽ tự khóa/hoãn nhận kèo các độ khác để khách không đánh nhầm.",
+            reply_markup=kb_open_do_picker(),
         )
+
+    elif data.startswith("a_open_num_"):
+        num_str = data.split("_")[3]
+        PENDING_STATE.pop(uid, None)
+        ok, msg, _ = open_specific_do_logic(num_str, exclusive_active=True)
+        bot.send_message(chat_id, msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid) if ok else None)
+
+    elif data == "a_open_custom":
+        PENDING_STATE[uid] = {"action": "ADMIN_OPEN_SPECIFIC_DO"}
+        bot.send_message(chat_id, "✍️ Nhập số độ bạn muốn mở (ví dụ: <code>3</code>, <code>5</code>, <code>12</code>):")
 
     elif data == "a_set_price":
         cur_open = db.get_open_dos()
+        if not cur_open:
+            bot.send_message(chat_id, "⚠️ Hiện không có độ nào đang mở để đổi giá.")
+            return
         if len(cur_open) == 1:
             d0 = cur_open[0]
             bot.send_message(
@@ -804,505 +862,400 @@ def on_callback(call: types.CallbackQuery):
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_multi_close_picker(sel))
 
     elif data.startswith("a_mclose_run_"):
-        result = data.split("_")[3]
+        result_code = data.split("_")[3]
         st = PENDING_STATE.get(uid) or {}
-        sel: set[int] = set(st.get("selected_ids") or set())
-        if not sel and len(db.get_open_dos()) == 1:
-            sel = {int(db.get_open_dos()[0]["id"])}
-        if not sel:
-            bot.answer_callback_query(call.id, "Hãy chọn ít nhất 1 độ trước khi chốt!", show_alert=True)
+        sel_ids = list(st.get("selected_ids") or [])
+        if not sel_ids:
+            cur_open = db.get_open_dos()
+            if len(cur_open) == 1:
+                sel_ids = [int(cur_open[0]["id"])]
+        if not sel_ids:
+            bot.answer_callback_query(call.id, "Bạn chưa chọn độ nào để chốt.", show_alert=True)
             return
 
         PENDING_STATE.pop(uid, None)
-        out = settle_multiple_dos_logic(list(sel), result)
-        target_out_chat = (
-            MASTER_GROUP_ID
-            if MASTER_GROUP_ID
-            else (PRICE_GROUP_ID if chat_type != "private" and PRICE_GROUP_ID else chat_id)
-        )
-        panel_out = get_panel_by_chat(target_out_chat, "group" if target_out_chat != uid else "private", uid)
-        do_names_str = ", ".join(out["do_names"])
+        summary = settle_multiple_dos_logic(sel_ids, result_code)
+        bot.answer_callback_query(call.id, f"Đã chốt {len(summary['do_names'])} độ ({result_code}).")
 
-        if result == "CANCEL":
-            bot.send_message(target_out_chat, f"🚫 Đã hủy <b>{do_names_str}</b>.", reply_markup=panel_out)
-        elif result == "DRAW":
-            bot.send_message(target_out_chat, f"🤝 <b>{do_names_str}</b> hòa.", reply_markup=panel_out)
-        else:
-            lines = [f"<b>TỔNG KẾT {do_names_str} — {result} THẮNG</b>"]
-            for item in out["users"]:
-                lines.append(
-                    f"• <b>{item['name']}</b> (<code>{item['user_id']}</code>): {fmt_signed(item['net'])} | "
-                    f"Ví: <b>{fmt_num(item['balance'])}</b> | Nợ: <b>{fmt_num(item['debt'])}</b>"
-                )
-                bot.send_message(
-                    item["user_id"],
-                    f"<b>KẾT QUẢ {do_names_str}: {result} THẮNG</b>\n"
-                    f"• Tổng ăn/thua của bạn: {fmt_signed(item['net'])}\n"
-                    f"• Ví: <b>{fmt_num(item['balance'])}</b> | Nợ: <b>{fmt_num(item['debt'])}</b>",
-                    reply_markup=kb_user_main(item["user_id"]),
-                )
-            lines.append(f"\n📌 Độ đang mở hiện tại: <b>{', '.join(out['open_dos'])}</b>")
-            bot.send_message(target_out_chat, "\n".join(lines), reply_markup=panel_out)
-
-        if MASTER_GROUP_ID:
-            for d_name in out["do_names"]:
-                per_do_txt = record_and_format_per_do_report(d_name, result, out["per_do_net"].get(d_name, {}))
-                bot.send_message(MASTER_GROUP_ID, per_do_txt)
-
-    elif data == "a_assign_approver":
-        if not is_master(uid):
-            bot.answer_callback_query(call.id, "Chỉ Master mới được chỉ định nhân viên duyệt.", show_alert=True)
-            return
-        PENDING_STATE[uid] = {"action": "MASTER_SET_APPROVER"}
-        cur_app = get_assigned_approver_id()
-        bot.send_message(
-            chat_id,
-            f"<b>CHỈ ĐỊNH NHÂN VIÊN DUYỆT NẠP / RÚT</b>\n"
-            f"• Đang chỉ định: <code>{cur_app if cur_app > 0 else 'Tất cả nhân viên'}</code>\n\n"
-            f"Nhập Telegram ID nhân viên (hoặc nhập <code>0</code> để mở cho mọi nhân viên):",
-        )
-
-    elif data.startswith("a_dep_no_"):
-        ok_perm, perm_msg = can_approve_item(uid)
-        if not ok_perm:
-            bot.answer_callback_query(call.id, "Chưa tới lượt duyệt của bạn!", show_alert=True)
-            bot.send_message(chat_id, perm_msg)
-            return
-        target_uid = int(data.split("_")[3])
-        notify_group_id = BILL_GROUP_ID or chat_id
-        bot.send_message(notify_group_id, f"❌ Đã từ chối yêu cầu nạp của ID <code>{target_uid}</code>.")
-        bot.send_message(target_uid, "❌ Yêu cầu nạp tiền của bạn chưa được xác nhận.")
-
-    elif data.startswith("a_dep_ok_"):
-        ok_perm, perm_msg = can_approve_item(uid)
-        if not ok_perm:
-            bot.answer_callback_query(call.id, "Chưa tới lượt duyệt của bạn!", show_alert=True)
-            bot.send_message(chat_id, perm_msg)
-            return
-        target_uid = int(data.split("_")[3])
-        st_u = PENDING_STATE.get(target_uid)
-        suggested = float(st_u["amount"]) if (st_u and "amount" in st_u) else 0.0
-        bot.send_message(
-            chat_id,
-            f"Chọn số tiền cộng cho ID <code>{target_uid}</code> hoặc nhập số khác:",
-            reply_markup=kb_deposit_presets(target_uid, suggested),
-        )
-
-    elif data.startswith("a_dep_amt_"):
-        ok_perm, perm_msg = can_approve_item(uid)
-        if not ok_perm:
-            bot.answer_callback_query(call.id, "Chưa tới lượt duyệt của bạn!", show_alert=True)
-            bot.send_message(chat_id, perm_msg)
-            return
-        _, _, _, target_uid_s, amt_s = data.split("_")
-        target_uid = int(target_uid_s)
-        amt = float(amt_s)
-        res = apply_deposit_logic(target_uid, amt)
-        u_info = res["user"]
-
-        notify_group_id = BILL_GROUP_ID or chat_id
-        bot.send_message(
-            notify_group_id,
-            f"✅ Đã duyệt cộng <b>+{fmt_num(amt)}</b> cho ID <code>{target_uid}</code> ({u_info['name']}). "
-            f"Ví mới: <b>{fmt_num(res['new_balance'])}</b>.",
-        )
-        bot.send_message(
-            target_uid,
-            f"<b>NẠP TIỀN THÀNH CÔNG</b>\n"
-            f"• ID: <code>{target_uid}</code>\n"
-            f"• Đã cộng: <b>+{fmt_num(amt)}</b>\n"
-            f"• Số dư hiện tại: <b>{fmt_num(res['new_balance'])}</b>",
-            reply_markup=kb_user_main(target_uid),
-        )
-        if MAIN_CHANNEL_ID:
-            bot.send_message(
-                MAIN_CHANNEL_ID,
-                f"<b>THÔNG BÁO NẠP ĐIỂM</b>\n"
-                f"Tài khoản ID <code>{target_uid}</code> vừa được nạp thành công <b>+{fmt_num(amt)}</b>.",
-            )
-
-    elif data.startswith("a_dep_custom_"):
-        ok_perm, perm_msg = can_approve_item(uid)
-        if not ok_perm:
-            bot.answer_callback_query(call.id, "Chưa tới lượt duyệt của bạn!", show_alert=True)
-            bot.send_message(chat_id, perm_msg)
-            return
-        target_uid = int(data.split("_")[3])
-        PENDING_STATE[uid] = {"action": "ADMIN_DEP_AMOUNT", "target_uid": target_uid}
-        bot.send_message(chat_id, f"Nhập số tiền cần cộng cho ID <code>{target_uid}</code>:")
-
-    elif data.startswith("a_wd_ok_"):
-        w_id = int(data.split("_")[3])
-        w_item = db.get_withdrawal(w_id)
-        ok_perm, perm_msg = can_approve_item(uid, w_item["assigned_staff_id"] if w_item else 0)
-        if not ok_perm:
-            bot.answer_callback_query(call.id, "Không đúng nhân viên được chỉ định duyệt!", show_alert=True)
-            bot.send_message(chat_id, perm_msg)
-            return
-
-        ok_wd, wd_msg, wd_info = confirm_withdrawal_logic(w_id)
-        bot.send_message(chat_id, wd_msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
-        if ok_wd and wd_info:
-            w_rec = wd_info["withdrawal"]
-            u_rec = wd_info["user"]
-            bot.send_message(
-                int(w_rec["user_id"]),
-                f"<b>RÚT TIỀN THÀNH CÔNG</b>\n"
-                f"• Mã rút: <code>#R{w_id:03d}</code>\n"
-                f"• Số tiền đã chuyển: <b>-{fmt_num(float(w_rec['amount']))}</b>\n"
-                f"• Số dư ví còn lại: <b>{fmt_num(float(u_rec['balance']))}</b>",
-                reply_markup=kb_user_main(int(w_rec["user_id"])),
-            )
-
-    elif data.startswith("a_wd_no_"):
-        w_id = int(data.split("_")[3])
-        w_item = db.get_withdrawal(w_id)
-        ok_perm, perm_msg = can_approve_item(uid, w_item["assigned_staff_id"] if w_item else 0)
-        if not ok_perm:
-            bot.answer_callback_query(call.id, "Không đúng nhân viên được chỉ định duyệt!", show_alert=True)
-            bot.send_message(chat_id, perm_msg)
-            return
-
-        ok_wd, wd_msg, wd_info = reject_withdrawal_logic(w_id)
-        bot.send_message(chat_id, wd_msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
-        if ok_wd and wd_info:
-            w_rec = wd_info["withdrawal"]
-            bot.send_message(
-                int(w_rec["user_id"]),
-                f"❌ Lệnh rút <code>#R{w_id:03d}</code> (<b>{fmt_num(float(w_rec['amount']))}</b>) đã bị từ chối và hoàn lại ví.\n"
-                f"• Ví hiện tại: <b>{fmt_num(float(wd_info['balance']))}</b>",
-                reply_markup=kb_user_main(int(w_rec["user_id"])),
-            )
+        for d_name in summary["do_names"]:
+            per_do_net = summary["per_do_net"].get(d_name, {})
+            rep_txt = record_and_format_per_do_report(d_name, result_code, per_do_net)
+            bot.send_message(chat_id, rep_txt, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
+            if MASTER_GROUP_ID and chat_id != MASTER_GROUP_ID:
+                bot.send_message(MASTER_GROUP_ID, rep_txt)
+            if MAIN_CHANNEL_ID:
+                try:
+                    bot.send_message(MAIN_CHANNEL_ID, rep_txt)
+                except Exception:
+                    pass
 
     elif data == "a_set_debt_limit":
         if not is_master(uid):
             bot.answer_callback_query(call.id, "Chỉ Master mới được cấp hạn mức nợ.", show_alert=True)
             return
-        PENDING_STATE[uid] = {"action": "MASTER_SET_DEBT_LIMIT"}
+        PENDING_STATE[uid] = {"action": "ADMIN_SET_DEBT_LIMIT"}
         bot.send_message(
             chat_id,
-            "Nhập <code>USER_ID HẠN_MỨC_NỢ</code>\nVí dụ: <code>123456 20000000</code> (nhập <code>0</code> để khóa ghi nợ).",
+            "Nhập theo mẫu: <code>ID_KHACH HAN_MUC_NO</code>\n"
+            "<i>Ví dụ: <code>5770334027 10000000</code></i>",
         )
 
     elif data == "a_debt_menu":
         if not is_master(uid):
-            bot.answer_callback_query(call.id, "Chỉ Master mới được thu/xóa nợ.", show_alert=True)
+            bot.answer_callback_query(call.id, "Chỉ Master mới được xử lý nợ.", show_alert=True)
             return
-        PENDING_STATE[uid] = {"action": "MASTER_COLLECT_OR_CLEAR_DEBT"}
+        PENDING_STATE[uid] = {"action": "ADMIN_CLEAR_DEBT"}
         bot.send_message(
             chat_id,
-            "<b>THU NỢ / XÓA NỢ CỘNG DỒN</b>\n"
-            "• Thu tiền khách trả (tính lợi nhuận thực thu): <code>THU USER_ID SỐ_TIỀN</code>\n"
-            "• Xóa nợ khi chốt mất: <code>XOA USER_ID</code>\n"
-            "Ví dụ: <code>THU 123456 5000000</code>",
+            "Nhập theo mẫu: <code>ID_KHACH SO_TIEN_THU_NO</code> (nhập <code>0</code> hoặc <code>ALL</code> để xóa hết nợ):\n"
+            "<i>Ví dụ: <code>5770334027 2000000</code> hoặc <code>5770334027 ALL</code></i>",
         )
 
-    bot.answer_callback_query(call.id)
+    elif data == "a_assign_approver":
+        if not is_master(uid):
+            bot.answer_callback_query(call.id, "Chỉ Master mới được chỉ định nhân viên duyệt.", show_alert=True)
+            return
+        PENDING_STATE[uid] = {"action": "ADMIN_ASSIGN_APPROVER"}
+        cur_app = get_assigned_approver_id()
+        bot.send_message(
+            chat_id,
+            f"Nhân viên duyệt hiện tại: <code>{cur_app or 'Chưa chỉ định (mọi admin duyệt)'}</code>\n"
+            f"Nhập <b>User ID</b> nhân viên cần chỉ định (hoặc nhập <code>0</code> để mở cho tất cả admin):",
+        )
+
+    elif data.startswith("a_dep_ok_"):
+        target_uid = int(data.split("_")[3])
+        ok, err = can_approve_item(uid)
+        if not ok:
+            bot.answer_callback_query(call.id, err, show_alert=True)
+            return
+        st = PENDING_STATE.get(target_uid)
+        suggested = float(st["amount"]) if (st and st.get("amount")) else 0.0
+        bot.send_message(
+            chat_id,
+            f"Chọn số tiền cộng vào ví khách ID <code>{target_uid}</code>:",
+            reply_markup=kb_deposit_presets(target_uid, suggested),
+        )
+
+    elif data.startswith("a_dep_no_"):
+        target_uid = int(data.split("_")[3])
+        ok, err = can_approve_item(uid)
+        if not ok:
+            bot.answer_callback_query(call.id, err, show_alert=True)
+            return
+        PENDING_STATE.pop(target_uid, None)
+        bot.send_message(chat_id, f"❌ Đã từ chối yêu cầu nạp của ID <code>{target_uid}</code>.")
+        try:
+            bot.send_message(target_uid, "❌ Yêu cầu nạp tiền của bạn chưa được duyệt. Vui lòng liên hệ hỗ trợ.")
+        except Exception:
+            pass
+
+    elif data.startswith("a_dep_amt_"):
+        parts = data.split("_")
+        target_uid = int(parts[3])
+        amt = float(parts[4])
+        ok, err = can_approve_item(uid)
+        if not ok:
+            bot.answer_callback_query(call.id, err, show_alert=True)
+            return
+        res = apply_deposit_logic(target_uid, amt)
+        PENDING_STATE.pop(target_uid, None)
+        u_after = res["user"]
+        bot.send_message(
+            chat_id,
+            f"✅ Đã cộng <b>{fmt_num(amt)}</b> cho <b>{u_after['name']}</b> (<code>{target_uid}</code>).\n"
+            f"• Ví mới: <b>{fmt_num(float(u_after['balance']))}</b>",
+        )
+        try:
+            bot.send_message(
+                target_uid,
+                f"✅ Nạp thành công <b>{fmt_num(amt)}</b> vào ví!\n"
+                f"• Số dư hiện tại: <b>{fmt_num(float(u_after['balance']))}</b>",
+                reply_markup=kb_user_main(target_uid),
+            )
+        except Exception:
+            pass
+
+    elif data.startswith("a_dep_custom_"):
+        target_uid = int(data.split("_")[3])
+        ok, err = can_approve_item(uid)
+        if not ok:
+            bot.answer_callback_query(call.id, err, show_alert=True)
+            return
+        PENDING_STATE[uid] = {"action": "ADMIN_DEP_CUSTOM_AMT", "target_uid": target_uid}
+        bot.send_message(chat_id, f"Nhập số tiền muốn cộng cho khách ID <code>{target_uid}</code>:")
+
+    elif data.startswith("a_wd_ok_"):
+        w_id = int(data.split("_")[3])
+        w_rec = db.get_withdrawal(w_id)
+        assigned = int(w_rec["assigned_staff_id"] or 0) if w_rec else 0
+        ok, err = can_approve_item(uid, assigned if assigned > 0 else None)
+        if not ok:
+            bot.answer_callback_query(call.id, err, show_alert=True)
+            return
+        done, msg, info = confirm_withdrawal_logic(w_id)
+        bot.send_message(chat_id, msg)
+        if done and info:
+            u_wd = info["user"]
+            try:
+                bot.send_message(
+                    int(u_wd["user_id"]),
+                    f"✅ Lệnh rút <code>#R{w_id:03d}</code> (<b>{fmt_num(float(w_rec['amount']))}</b>) đã được chuyển tiền!",
+                    reply_markup=kb_user_main(int(u_wd["user_id"])),
+                )
+            except Exception:
+                pass
+
+    elif data.startswith("a_wd_no_"):
+        w_id = int(data.split("_")[3])
+        w_rec = db.get_withdrawal(w_id)
+        assigned = int(w_rec["assigned_staff_id"] or 0) if w_rec else 0
+        ok, err = can_approve_item(uid, assigned if assigned > 0 else None)
+        if not ok:
+            bot.answer_callback_query(call.id, err, show_alert=True)
+            return
+        done, msg, info = reject_withdrawal_logic(w_id)
+        bot.send_message(chat_id, msg)
+        if done and info and w_rec:
+            try:
+                bot.send_message(
+                    int(w_rec["user_id"]),
+                    f"❌ Lệnh rút <code>#R{w_id:03d}</code> bị từ chối và đã hoàn lại <b>{fmt_num(float(w_rec['amount']))}</b> vào ví.",
+                    reply_markup=kb_user_main(int(w_rec["user_id"])),
+                )
+            except Exception:
+                pass
+
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 
-# ==================== XỬ LÝ ẢNH (QR RÚT TIỀN HOẶC BILL NẠP) ====================
+# ==================== XỬ LÝ TIN NHẮN & ẢNH THEO TRẠNG THÁI ====================
 @bot.message_handler(content_types=["photo"])
 def on_photo(message: types.Message):
-    if message.chat.type != "private":
-        return
     uid = message.from_user.id
-    u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
-    file_id = message.photo[-1].file_id
-    state = PENDING_STATE.get(uid)
+    chat_id = message.chat.id
+    st = PENDING_STATE.get(uid)
+    photo_id = message.photo[-1].file_id
 
-    if state and state.get("action") == "USER_WD_INFO":
+    if st and st.get("action") == "USER_WD_INFO":
+        amt = float(st["amount"])
         PENDING_STATE.pop(uid, None)
-        amt = float(state["amount"])
-        ok, msg, w_rec = create_withdrawal_logic(uid, amt, payout_text="", qr_file_id=file_id)
-        bot.send_message(message.chat.id, msg, reply_markup=kb_user_main(uid))
+        ok, msg, w_rec = create_withdrawal_logic(uid, amt, payout_text="", qr_file_id=photo_id)
+        bot.send_message(chat_id, msg, reply_markup=kb_user_main(uid))
         if ok and w_rec:
+            u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
             dispatch_withdrawal_to_bill_group(u, w_rec)
         return
 
-    bot.send_message(
-        message.chat.id,
-        f"✅ Đã nhận ảnh bill từ ID <code>{uid}</code>, đang chuyển cho nhân viên kiểm tra.",
-        reply_markup=kb_user_main(uid),
-    )
     if BILL_GROUP_ID:
+        u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
         approver_id = get_assigned_approver_id()
         approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>Tất cả nhân viên</i>"
-        bot.send_photo(
-            BILL_GROUP_ID,
-            file_id,
-            caption=(
-                f"🧾 <b>BILL NẠP TIỀN</b>\n"
-                f"• Khách: <b>{u['name']}</b> (@{u['username'] or 'không_có'})\n"
-                f"• Nội dung CK / ID: <code>{uid}</code>\n"
-                f"• Nhân viên chỉ định duyệt: {approver_txt}"
-            ),
-            reply_markup=kb_approve_deposit(uid),
+        cap = (
+            f"🧾 <b>BILL NẠP TIỀN TỪ KHÁCH</b>\n"
+            f"• Khách: <b>{u['name']}</b> (@{u['username'] or 'không_có'}) | ID: <code>{uid}</code>\n"
+            f"• Nhân viên chỉ định duyệt: {approver_txt}\n"
+            f"• Thời gian: <code>{datetime.now().strftime('%H:%M - %d/%m/%Y')}</code>"
         )
+        bot.send_photo(BILL_GROUP_ID, photo_id, caption=cap, reply_markup=kb_approve_deposit(uid))
 
 
-# ==================== XỬ LÝ TIN NHẮN VĂN BẢN ====================
-@bot.message_handler(content_types=["text"])
+@bot.message_handler(func=lambda m: bool(m.text and not m.text.startswith("/")))
 def on_text(message: types.Message):
-    txt = message.text.strip()
-    if txt.startswith("/"):
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    chat_type = message.chat.type
+    raw = message.text.strip()
+    st = PENDING_STATE.get(uid)
+
+    if not st:
         return
 
-    uid = message.from_user.id
-    u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
-    state = PENDING_STATE.get(uid)
+    act = st.get("action")
 
-    # --- USER INPUTS ---
-    if message.chat.type == "private" and state:
-        act = state.get("action")
-
-        if act == "USER_DEP_CUSTOM_AMOUNT":
-            PENDING_STATE.pop(uid, None)
-            try:
-                amt = float(txt.replace(".", "").replace(",", ""))
-            except ValueError:
-                bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
-                return
-            if amt < MIN_DEPOSIT_AMOUNT:
-                bot.send_message(
-                    message.chat.id,
-                    f"❌ Số tiền nạp tối thiểu là <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.",
-                    reply_markup=kb_user_main(uid),
-                )
-                return
-            send_deposit_qr(message.chat.id, uid, amt)
-            return
-
-        if act == "USER_BET_AMOUNT":
-            PENDING_STATE.pop(uid, None)
-            try:
-                amt = float(txt.replace(".", "").replace(",", ""))
-            except ValueError:
-                bot.send_message(message.chat.id, "Vui lòng nhập số hợp lệ.", reply_markup=kb_user_main(uid))
-                return
-            _, res_msg = place_bet_logic(uid, amt, state["side"], do_id=state.get("do_id"))
-            bot.send_message(message.chat.id, res_msg, reply_markup=kb_user_main(uid))
-            return
-
-        if act == "USER_WD_AMOUNT":
-            bal = float(u["balance"])
-            try:
-                amt = float(txt.replace(".", "").replace(",", ""))
-            except ValueError:
-                PENDING_STATE.pop(uid, None)
-                bot.send_message(message.chat.id, "Vui lòng nhập số tiền hợp lệ.", reply_markup=kb_user_main(uid))
-                return
-
-            if amt < MIN_WITHDRAW_AMOUNT:
-                PENDING_STATE.pop(uid, None)
-                bot.send_message(
-                    message.chat.id,
-                    f"❌ Số tiền rút tối thiểu là <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
-                    reply_markup=kb_user_main(uid),
-                )
-                return
-
-            if amt > bal + 1e-6:
-                PENDING_STATE.pop(uid, None)
-                bot.send_message(
-                    message.chat.id,
-                    f"❌ Số tiền rút vượt số dư ví (Tối đa: <b>{fmt_num(bal)}</b>).",
-                    reply_markup=kb_user_main(uid),
-                )
-                return
-
-            PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": amt}
-            bot.send_message(
-                message.chat.id,
-                f"<b>NHẬP THÔNG TIN NHẬN TIỀN RÚT ({fmt_num(amt)})</b>\n"
-                f"Gửi <b>ảnh mã QR</b> HOẶC nhắn theo mẫu:\n"
-                f"<code>Ngân hàng - Số tài khoản - Tên chủ TK</code>",
-            )
-            return
-
-        if act == "USER_WD_INFO":
-            PENDING_STATE.pop(uid, None)
-            amt = float(state["amount"])
-            ok, msg, w_rec = create_withdrawal_logic(uid, amt, payout_text=txt, qr_file_id="")
-            bot.send_message(message.chat.id, msg, reply_markup=kb_user_main(uid))
-            if ok and w_rec:
-                dispatch_withdrawal_to_bill_group(u, w_rec)
-            return
-
-    # --- ADMIN / MASTER INPUTS ---
-    if is_admin(uid) and state:
-        act = state.get("action")
+    # --- ADMIN STATES ---
+    if act == "ADMIN_OPEN_SPECIFIC_DO" and is_admin(uid):
         PENDING_STATE.pop(uid, None)
+        ok, msg, _ = open_specific_do_logic(raw, exclusive_active=True)
+        bot.send_message(chat_id, msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid) if ok else None)
+        return
 
-        if act == "MASTER_SET_APPROVER":
-            if not is_master(uid):
-                bot.send_message(message.chat.id, "Chỉ Master mới có quyền này.")
-                return
-            try:
-                staff_id = int(txt.strip())
-                set_assigned_approver_id(staff_id)
-                desc = f"ID <code>{staff_id}</code>" if staff_id > 0 else "<b>Tất cả nhân viên</b>"
-                bot.send_message(
-                    message.chat.id,
-                    f"✅ Đã cập nhật nhân viên chỉ định duyệt mặc định: {desc}",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
-            except ValueError:
-                bot.send_message(message.chat.id, "Vui lòng nhập Telegram ID dạng số (ví dụ <code>7709258303</code> hoặc <code>0</code>).")
+    if act == "ADMIN_SET_PRICE_ONE_SIDE" and is_admin(uid):
+        target_ids: list[int] = st.get("target_do_ids") or []
+        chosen_side = st.get("side") or "XANH"
+        target_label = st.get("target_label") or ""
+        try:
+            ratio_map = parse_single_side_ratio(f"{chosen_side} {raw}", chosen_side)
+        except Exception:
+            bot.send_message(chat_id, "❌ Tỷ lệ không hợp lệ. Ví dụ nhập: <code>5/10</code> hoặc <code>10/8</code>.")
             return
 
-        if act == "ADMIN_DEP_AMOUNT":
-            ok_perm, perm_msg = can_approve_item(uid)
-            if not ok_perm:
-                bot.send_message(message.chat.id, perm_msg)
-                return
+        PENDING_STATE.pop(uid, None)
+        for d_id in target_ids:
+            db.update_do(d_id, **ratio_map)
+        bot.send_message(
+            chat_id,
+            f"✅ Đã cập nhật giá cho <b>{target_label}</b>:\n"
+            f"• XANH: <code>{ratio_map['xanh_win']:g}/{ratio_map['xanh_lose']:g}</code>\n"
+            f"• ĐỎ: <code>{ratio_map['do_win']:g}/{ratio_map['do_lose']:g}</code>",
+            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
+        )
+        return
+
+    if act == "ADMIN_SET_DEBT_LIMIT" and is_master(uid):
+        parts = raw.split()
+        if len(parts) != 2 or not parts[0].isdigit():
+            bot.send_message(chat_id, "❌ Sai cú pháp. Nhập: <code>ID_KHACH HAN_MUC_NO</code>")
+            return
+        t_uid = int(parts[0])
+        try:
+            d_lim = float(parts[1].replace(".", "").replace(",", ""))
+        except ValueError:
+            bot.send_message(chat_id, "❌ Hạn mức nợ không hợp lệ.")
+            return
+        PENDING_STATE.pop(uid, None)
+        db.get_user(t_uid)
+        db.update_user_fields(t_uid, debt_limit=max(0.0, d_lim))
+        u_after = db.get_user(t_uid)
+        bot.send_message(
+            chat_id,
+            f"✅ Đã cập nhật hạn mức nợ cho ID <code>{t_uid}</code>: <b>{fmt_num(float(u_after['debt_limit']))}</b>",
+            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
+        )
+        return
+
+    if act == "ADMIN_CLEAR_DEBT" and is_master(uid):
+        parts = raw.split()
+        if len(parts) != 2 or not parts[0].isdigit():
+            bot.send_message(chat_id, "❌ Sai cú pháp. Nhập: <code>ID_KHACH SO_TIEN_HOAC_ALL</code>")
+            return
+        t_uid = int(parts[0])
+        u_cur = db.get_user(t_uid)
+        cur_debt = float(u_cur["debt"])
+        PENDING_STATE.pop(uid, None)
+        if parts[1].upper() == "ALL":
+            paid = cur_debt
+            new_debt = 0.0
+        else:
             try:
-                amt = float(txt.replace(".", "").replace(",", ""))
+                paid = float(parts[1].replace(".", "").replace(",", ""))
             except ValueError:
-                bot.send_message(message.chat.id, "Số tiền không hợp lệ.")
+                bot.send_message(chat_id, "❌ Số tiền không hợp lệ.")
                 return
-            target_uid = int(state["target_uid"])
-            res = apply_deposit_logic(target_uid, amt)
-            u_info = res["user"]
+            new_debt = max(0.0, cur_debt - paid)
+        db.update_user_fields(t_uid, debt=new_debt)
+        bot.send_message(
+            chat_id,
+            f"✅ Đã thu/xóa <b>{fmt_num(paid)}</b> nợ cho ID <code>{t_uid}</code>. Nợ còn lại: <b>{fmt_num(new_debt)}</b>",
+            reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
+        )
+        return
 
-            notify_group_id = BILL_GROUP_ID or message.chat.id
+    if act == "ADMIN_ASSIGN_APPROVER" and is_master(uid):
+        if not raw.isdigit():
+            bot.send_message(chat_id, "❌ Vui lòng nhập User ID dạng số (hoặc <code>0</code>).")
+            return
+        staff_id = int(raw)
+        PENDING_STATE.pop(uid, None)
+        set_assigned_approver_id(staff_id)
+        txt = f"✅ Đã chỉ định nhân viên duyệt ID <code>{staff_id}</code>." if staff_id > 0 else "✅ Đã mở quyền duyệt cho tất cả admin."
+        bot.send_message(chat_id, txt, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
+        return
+
+    if act == "ADMIN_DEP_CUSTOM_AMT" and is_admin(uid):
+        t_uid = int(st["target_uid"])
+        try:
+            amt = float(raw.replace(".", "").replace(",", ""))
+            if amt <= 0:
+                raise ValueError()
+        except ValueError:
+            bot.send_message(chat_id, "❌ Số tiền không hợp lệ.")
+            return
+        PENDING_STATE.pop(uid, None)
+        res = apply_deposit_logic(t_uid, amt)
+        u_after = res["user"]
+        bot.send_message(
+            chat_id,
+            f"✅ Đã cộng <b>{fmt_num(amt)}</b> cho ID <code>{t_uid}</code>. Ví mới: <b>{fmt_num(float(u_after['balance']))}</b>",
+        )
+        try:
             bot.send_message(
-                notify_group_id,
-                f"✅ Đã duyệt cộng <b>+{fmt_num(amt)}</b> cho ID <code>{target_uid}</code> ({u_info['name']}). "
-                f"Ví mới: <b>{fmt_num(res['new_balance'])}</b>.",
+                t_uid,
+                f"✅ Nạp thành công <b>{fmt_num(amt)}</b> vào ví!\n• Số dư hiện tại: <b>{fmt_num(float(u_after['balance']))}</b>",
+                reply_markup=kb_user_main(t_uid),
             )
-            bot.send_message(
-                target_uid,
-                f"<b>NẠP TIỀN THÀNH CÔNG</b>\n"
-                f"• ID: <code>{target_uid}</code>\n"
-                f"• Đã cộng: <b>+{fmt_num(amt)}</b>\n"
-                f"• Số dư hiện tại: <b>{fmt_num(res['new_balance'])}</b>",
-                reply_markup=kb_user_main(target_uid),
-            )
-            if MAIN_CHANNEL_ID:
-                bot.send_message(
-                    MAIN_CHANNEL_ID,
-                    f"<b>THÔNG BÁO NẠP ĐIỂM</b>\n"
-                    f"Tài khoản ID <code>{target_uid}</code> vừa được nạp thành công <b>+{fmt_num(amt)}</b>.",
-                )
+        except Exception:
+            pass
+        return
 
-        elif act == "ADMIN_SET_PRICE_ONE_SIDE":
-            try:
-                updates = parse_single_side_ratio(txt, state["side"])
-                target_ids = list(state.get("target_do_ids") or [])
-                target_label = state.get("target_label") or "Độ hiện tại"
-                for d_id in target_ids:
-                    db.update_do(int(d_id), **updates)
+    # --- USER STATES ---
+    if act == "USER_DEP_CUSTOM_AMOUNT":
+        try:
+            amt = float(raw.replace(".", "").replace(",", ""))
+        except ValueError:
+            bot.send_message(chat_id, "❌ Vui lòng nhập số tiền hợp lệ.")
+            return
+        if amt < MIN_DEPOSIT_AMOUNT:
+            bot.send_message(chat_id, f"❌ Số tiền nạp tối thiểu là <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.")
+            return
+        PENDING_STATE.pop(uid, None)
+        send_deposit_qr(chat_id, uid, amt)
+        return
 
-                first_do = db.get_do_by_id(int(target_ids[0])) if target_ids else db.get_open_dos()[0]
-                bot.send_message(
-                    message.chat.id,
-                    f"✅ Đã cập nhật giá cho <b>{target_label}</b>:\n"
-                    f"• XANH: <b>{float(first_do['xanh_win']):g}/{float(first_do['xanh_lose']):g}</b>\n"
-                    f"• ĐỎ: <b>{float(first_do['do_win']):g}/{float(first_do['do_lose']):g}</b>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
-            except Exception:
-                bot.send_message(
-                    message.chat.id,
-                    "Sai định dạng. Chỉ cần nhập tỷ lệ dạng <code>5/10</code> (ví dụ <code>5/10</code> hoặc <code>2/10</code>).",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
+    if act == "USER_WD_AMOUNT":
+        try:
+            amt = float(raw.replace(".", "").replace(",", ""))
+        except ValueError:
+            bot.send_message(chat_id, "❌ Vui lòng nhập số tiền hợp lệ.")
+            return
+        u_cur = db.get_user(uid)
+        bal = float(u_cur["balance"])
+        if amt < MIN_WITHDRAW_AMOUNT:
+            bot.send_message(chat_id, f"❌ Số tiền rút tối thiểu là <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.")
+            return
+        if amt > bal + 1e-6:
+            bot.send_message(chat_id, f"❌ Số tiền rút vượt số dư ví (Tối đa: <b>{fmt_num(bal)}</b>).")
+            return
+        PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": amt}
+        bot.send_message(
+            chat_id,
+            f"<b>NHẬP THÔNG TIN NHẬN TIỀN RÚT ({fmt_num(amt)})</b>\n"
+            f"Gửi <b>ảnh mã QR</b> tài khoản nhận HOẶC nhắn theo mẫu:\n"
+            f"<code>Ngân hàng - Số tài khoản - Tên chủ TK</code>",
+        )
+        return
 
-        elif act == "ADMIN_SET_PRICE":
-            try:
-                updates = parse_price_input(txt)
-                target_ids = list(state.get("target_do_ids") or [])
-                target_label = state.get("target_label") or "Độ hiện tại"
-                for d_id in target_ids:
-                    db.update_do(int(d_id), **updates)
+    if act == "USER_WD_INFO":
+        amt = float(st["amount"])
+        PENDING_STATE.pop(uid, None)
+        ok, msg, w_rec = create_withdrawal_logic(uid, amt, payout_text=raw, qr_file_id="")
+        bot.send_message(chat_id, msg, reply_markup=kb_user_main(uid))
+        if ok and w_rec:
+            u_cur = db.get_user(uid, message.from_user.first_name, message.from_user.username)
+            dispatch_withdrawal_to_bill_group(u_cur, w_rec)
+        return
 
-                first_do = db.get_do_by_id(int(target_ids[0])) if target_ids else db.get_open_dos()[0]
-                bot.send_message(
-                    message.chat.id,
-                    f"✅ Đã cập nhật giá cho <b>{target_label}</b>:\n"
-                    f"• XANH: <b>{float(first_do['xanh_win']):g}/{float(first_do['xanh_lose']):g}</b>\n"
-                    f"• ĐỎ: <b>{float(first_do['do_win']):g}/{float(first_do['do_lose']):g}</b>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
-            except Exception:
-                bot.send_message(
-                    message.chat.id,
-                    "Sai định dạng. Nhập 1 cửa để tự đảo (VD: <code>XANH 1/10</code>) hoặc đủ 2 cửa (VD: <code>XANH 1/10 | DO 10/5</code>).",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
-
-        elif act == "MASTER_SET_DEBT_LIMIT":
-            if not is_master(uid):
-                bot.send_message(message.chat.id, "Chỉ Master mới được cấp hạn mức nợ.")
-                return
-            try:
-                parts = txt.split()
-                target_uid = int(parts[0])
-                limit_val = float(parts[1].replace(".", "").replace(",", ""))
-                u_target = db.get_user(target_uid)
-                db.update_user_fields(target_uid, debt_limit=limit_val)
-                bot.send_message(
-                    message.chat.id,
-                    f"✅ Đã đặt hạn mức ghi nợ cho ID <code>{target_uid}</code> ({u_target['name']}): <b>{fmt_num(limit_val)}</b>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
-            except Exception:
-                bot.send_message(
-                    message.chat.id,
-                    "Sai mẫu. Ví dụ đúng: <code>123456 20000000</code>",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
-
-        elif act == "MASTER_COLLECT_OR_CLEAR_DEBT":
-            if not is_master(uid):
-                bot.send_message(message.chat.id, "Chỉ Master mới được thu/xóa nợ.")
-                return
-            try:
-                parts = txt.upper().split()
-                cmd_type = parts[0]
-                target_uid = int(parts[1])
-                u_target = db.get_user(target_uid)
-                cur_debt = float(u_target["debt"])
-
-                if cmd_type == "THU":
-                    amt = float(parts[2].replace(".", "").replace(",", ""))
-                    paid_debt = min(cur_debt, amt)
-                    db.update_user_fields(target_uid, debt=cur_debt - paid_debt)
-                    db.add_realized_profit(amt)
-                    bot.send_message(
-                        message.chat.id,
-                        f"💵 Đã thu <b>+{fmt_num(amt)}</b> từ ID <code>{target_uid}</code>.\n"
-                        f"• Trừ nợ: <b>{fmt_num(paid_debt)}</b> | Nợ còn: <b>{fmt_num(cur_debt - paid_debt)}</b>\n"
-                        f"• Cộng vào lợi nhuận thực thu: <b>+{fmt_num(amt)}</b>",
-                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                    )
-                elif cmd_type == "XOA":
-                    db.update_user_fields(target_uid, debt=0.0)
-                    bot.send_message(
-                        message.chat.id,
-                        f"🗑️ Đã xóa nợ treo <b>{fmt_num(cur_debt)}</b> cho ID <code>{target_uid}</code>.",
-                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                    )
-                else:
-                    bot.send_message(
-                        message.chat.id,
-                        "Dùng <code>THU ID SỐ_TIỀN</code> hoặc <code>XOA ID</code>.",
-                        reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                    )
-            except Exception:
-                bot.send_message(
-                    message.chat.id,
-                    "Sai mẫu thu/xóa nợ.",
-                    reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
-                )
+    if act == "USER_BET_AMOUNT":
+        try:
+            amt = float(raw.replace(".", "").replace(",", ""))
+        except ValueError:
+            bot.send_message(chat_id, "❌ Vui lòng nhập số tiền hợp lệ.")
+            return
+        side = st["side"]
+        do_id = int(st["do_id"])
+        PENDING_STATE.pop(uid, None)
+        _, res_msg = place_bet_logic(uid, amt, side, do_id=do_id)
+        bot.send_message(chat_id, res_msg, reply_markup=kb_user_main(uid))
+        return
 
 
 def run_bot() -> None:
-    print("Bot đá gà đang khởi chạy...")
-    bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=25)
+    bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=run_bot, daemon=True)
-    t.start()
-    app.run(host="0.0.0.0", port=PORT)
+    threading.Thread(target=run_bot, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(PORT or 10000))
