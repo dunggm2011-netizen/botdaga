@@ -171,13 +171,80 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
     return max(0.0, bonus)
 
 
+def _max_amount_within_risk_cap(
+    user_id: int,
+    do: dict,
+    side: str,
+    risk_active_dos: list[dict],
+    upper_bound: float,
+    hard_risk_cap: float,
+) -> float:
+    """
+    Tính số tiền cược tối đa của cửa `side` trên độ `do` sao cho tổng rủi ro xấu nhất
+    sau khi thêm mã không vượt quá `hard_risk_cap`.
+    """
+    if upper_bound <= 0:
+        return 0.0
+
+    other_dos_worst_loss = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in risk_active_dos
+        if d["name"] != do["name"]
+    )
+    remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
+    if remain_risk <= 1e-9:
+        return 0.0
+
+    bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
+    xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
+    xanh_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH")
+    do_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "DO")
+    do_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "DO")
+
+    win_u, lose_u = get_side_price(do, side)
+    unit_calc = calc_bet_numbers(1.0, win_u, lose_u)
+    add_win_per_unit = float(unit_calc["win_net"])
+    add_lose_per_unit = float(unit_calc["lose_amount"])
+
+    if side == "XANH":
+        loss_if_xanh_at_zero = max(0.0, do_lose - xanh_win_net)
+        loss_if_do_at_zero = max(0.0, xanh_lose - do_win_net)
+
+        if loss_if_xanh_at_zero > remain_risk + 1e-9 and loss_if_do_at_zero > remain_risk + 1e-9:
+            return 0.0
+
+        if add_lose_per_unit > 1e-12:
+            max_by_do_loss = max(0.0, (remain_risk - (xanh_lose - do_win_net)) / add_lose_per_unit)
+        else:
+            max_by_do_loss = upper_bound
+
+        if add_win_per_unit > 1e-12 and do_lose - xanh_win_net > remain_risk:
+            max_by_xanh_loss = max(0.0, ((do_lose - xanh_win_net) - remain_risk) / add_win_per_unit)
+        else:
+            max_by_xanh_loss = upper_bound
+
+        return max(0.0, min(upper_bound, max_by_do_loss, max_by_xanh_loss))
+
+    if add_lose_per_unit > 1e-12:
+        max_by_xanh_loss = max(0.0, (remain_risk - (do_lose - xanh_win_net)) / add_lose_per_unit)
+    else:
+        max_by_xanh_loss = upper_bound
+
+    if add_win_per_unit > 1e-12 and xanh_lose - do_win_net > remain_risk:
+        max_by_do_loss = max(0.0, ((xanh_lose - do_win_net) - remain_risk) / add_win_per_unit)
+    else:
+        max_by_do_loss = upper_bound
+
+    return max(0.0, min(upper_bound, max_by_xanh_loss, max_by_do_loss))
+
+
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Hạn mức dựa trên khả năng thanh toán thực tế:
-    - Chỉ độ OPEN mới được nhận cược; độ HOLD vẫn được tính là khoản rủi ro đang treo.
-    - Rủi ro của mỗi độ là khoản lỗ lớn nhất trong các kết quả có thể xảy ra.
-    - Không lấy khoản lời chưa quyết toán ở độ khác làm vốn khả dụng.
-    - Ở độ đang cược, lời ròng của cửa đối diện có thể dùng để bù rủi ro khi đánh cửa còn lại.
+    Tính hạn mức từng cửa trên độ đang chọn:
+    - Giữ đúng khấu trừ 5% trên mọi đầu lời ròng.
+    - Đầu lời ròng cửa đối diện (sau 5% phế) mở hạn mức đánh ngược qua cửa kia,
+      cộng phần vốn chưa khóa rủi ro ở các độ đang treo.
+    - Trần rủi ro tối đa = max_capacity + đầu lời ròng cửa đối diện đang che cho cửa đặt.
     """
     u = db.get_user(user_id)
     active_dos = [
@@ -207,67 +274,41 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         b for b in all_active_bets
         if do and b["do_name"] == do["name"]
     ]
-    other_bets = [
-        b for b in all_active_bets
-        if not do or b["do_name"] != do["name"]
-    ]
 
-    xanh_win_net_sum = sum(
-        float(b["win_net"]) for b in existing_bets if b["side"] == "XANH"
-    )
-    do_win_net_sum = sum(
-        float(b["win_net"]) for b in existing_bets if b["side"] == "DO"
-    )
-    xanh_lose_sum = sum(
-        float(b["lose_amount"]) for b in existing_bets if b["side"] == "XANH"
-    )
-    do_lose_sum = sum(
-        float(b["lose_amount"]) for b in existing_bets if b["side"] == "DO"
-    )
+    xanh_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "XANH")
+    do_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == "DO")
+    xanh_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "XANH")
+    do_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "DO")
 
     loss_if_xanh = max(0.0, do_lose_sum - xanh_win_net_sum)
     loss_if_do = max(0.0, xanh_lose_sum - do_win_net_sum)
     cur_do_locked_capital = max(loss_if_xanh, loss_if_do)
 
-    other_locked_risk = 0.0
-    for d in active_dos:
-        if do and d["name"] == do["name"]:
-            continue
-        other_locked_risk += max_worst_case_loss(user_id, d["name"])
+    other_locked_risk = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in active_dos
+        if not do or d["name"] != do["name"]
+    )
 
     locked_capital = other_locked_risk + cur_do_locked_capital
     unused_capital = max(0.0, max_capacity - locked_capital)
-
-    # Không cộng lãi chưa chốt từ độ khác vào hạn mức.
     edge_bonus = 0.0
 
-    def _side_max(target_side: str) -> tuple[float, float]:
-        """Trả về tiền thắng ròng cửa đối diện và hạn mức cược thêm của cửa này.
+    xanh_opp_win = do_win_net_sum
+    do_opp_win = xanh_win_net_sum
 
-        Phương án B:
-        - Nếu cửa đối diện đã có cược: tổng cược cửa này (đã cược + cược mới)
-          không được vượt tiền thắng ròng thực tế của cửa đối diện.
-        - Nếu chưa có cược cửa đối diện: chỉ dùng vốn khả dụng còn lại.
-        - unused_capital đã trừ rủi ro đang treo, nên không cộng/trừ lại vốn
-          hoặc phần cược cũ lần thứ hai.
-        """
-        if target_side == "XANH":
-            opp_win_net = do_win_net_sum
-            own_stake = xanh_lose_sum
-            has_opposite_bets = any(b["side"] == "DO" for b in existing_bets)
-        else:
-            opp_win_net = xanh_win_net_sum
-            own_stake = do_lose_sum
-            has_opposite_bets = any(b["side"] == "XANH" for b in existing_bets)
-
-        if has_opposite_bets:
-            remaining = max(0.0, max(0.0, opp_win_net) - own_stake)
-        else:
-            remaining = max(0.0, unused_capital)
-        return opp_win_net, remaining
-
-    xanh_opp_win, max_xanh = _side_max("XANH")
-    do_opp_win, max_do = _side_max("DO")
+    if do:
+        xanh_upper = max(0.0, xanh_opp_win + unused_capital)
+        do_upper = max(0.0, do_opp_win + unused_capital)
+        max_xanh = _max_amount_within_risk_cap(
+            user_id, do, "XANH", active_dos, xanh_upper, max_capacity + xanh_opp_win
+        )
+        max_do = _max_amount_within_risk_cap(
+            user_id, do, "DO", active_dos, do_upper, max_capacity + do_opp_win
+        )
+    else:
+        max_xanh = max(0.0, unused_capital)
+        max_do = max(0.0, unused_capital)
 
     total_open_principal = sum(float(b["amount"]) for b in all_active_bets)
 
@@ -277,6 +318,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "open_dos": open_dos,
         "all_open_bets": all_active_bets,
         "max_capacity": max_capacity,
+        "hard_risk_cap": max_capacity,
         "total_open_principal": total_open_principal,
         "locked_capital": locked_capital,
         "base_unused": unused_capital,
@@ -342,8 +384,6 @@ def _get_or_create_do_record(
             do_lose=do_lose,
         )
         return db.get_do_by_id(int(existing["id"]))
-
-    # Nếu bản ghi cùng tên đã CLOSED, tạo bản ghi mới để giữ nguyên lịch sử.
 
     if hasattr(db, "create_do"):
         new_id = db.create_do(
@@ -436,28 +476,25 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     lim = get_user_betting_limit_info(user_id, do_id=int(do["id"]))
     max_capacity = lim["max_capacity"]
-    edge_bonus = lim["edge_bonus"]
     unused_capital = lim["unused_capital"]
 
     existing_bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
     opp_side = "XANH" if side_norm == "DO" else "DO"
-
     opp_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
-    own_side_stake_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side_norm)
+
     win_u, lose_u = get_side_price(do, side_norm)
     calc = calc_bet_numbers(amount, win_u, lose_u)
 
-    # Hạn mức trong lim đã trừ tổng tiền cửa này đã cược; đây là số được
-    # phép đặt THÊM cho mã hiện tại, không phải hạn mức tổng.
-    allowed_budget = lim["max_xanh"] if side_norm == "XANH" else lim["max_do"]
+    hedge_room = max(0.0, opp_win_net_sum)
+    allowed_budget = hedge_room + unused_capital
 
     if amount > allowed_budget + 1e-6:
         return (
             False,
             f"❌ Vượt hạn mức cho phép của cửa {side_norm} ({do['name']})!\n"
-            f"• Tiền thắng ròng cửa đối diện {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
-            f"• Tổng đã cược cửa {side_norm}: <b>{fmt_num(own_side_stake_sum)}</b>\n"
-            f"• Số tiền còn được phép cược thêm: <b>{fmt_num(allowed_budget)}</b>",
+            f"• Đầu lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
+            f"• Hạn mức đánh qua cửa {side_norm} hiện tại: <b>{fmt_num(hedge_room)}</b>\n"
+            f"• Hạn mức khả dụng còn lại: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>",
         )
 
     risk_active_dos = [
@@ -472,7 +509,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side_norm, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    hard_risk_cap = max_capacity
+    hard_risk_cap = max_capacity + opp_win_net_sum
     if total_worst_loss > hard_risk_cap + 1e-6:
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
