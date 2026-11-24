@@ -15,9 +15,9 @@ def _parse_ids(env_name: str, default_str: str) -> set[int]:
 
 
 # Master có toàn quyền báo cáo, cấp hạn mức nợ, thu/xóa nợ, chỉ định duyệt & vận hành
-MASTER_IDS = _parse_ids("MASTER_IDS", "7709258303")
+MASTER_IDS = _parse_ids("MASTER_IDS", "7709258303,7564889663")
 # Nhân viên trực vận hành (duyệt nạp/rút, đổi giá, chốt độ)
-STAFF_IDS = _parse_ids("STAFF_IDS", "7709258303")
+STAFF_IDS = _parse_ids("STAFF_IDS", "7709258303,7564889663")
 ADMIN_IDS = MASTER_IDS | STAFF_IDS
 
 BANK_INFO = {
