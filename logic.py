@@ -795,4 +795,3 @@ def close_day_accounting_logic(day_key: str | None = None) -> str:
         conn.commit()
     db.clear_settled_dos_by_day(target_day)
     return report_snapshot
-
