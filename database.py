@@ -1,5 +1,9 @@
 import sqlite3
+import threading
 from config import DB_PATH
+
+# Lock để đảm bảo add_bet + tăng bet_seq là atomic (tránh race condition)
+_bet_lock = threading.Lock()
 
 
 def get_conn() -> sqlite3.Connection:
@@ -93,7 +97,7 @@ def init_db() -> None:
 
         cur.execute("""
             INSERT OR IGNORE INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-            VALUES ('\u0110\u1ed9 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
+            VALUES ('Độ 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
         """)
 
         cur.execute("""
@@ -108,6 +112,10 @@ def init_db() -> None:
 
         conn.commit()
 
+
+# ============================================================
+# SETTINGS
+# ============================================================
 
 def set_setting(key: str, val_text: str) -> None:
     with get_conn() as conn:
@@ -127,7 +135,11 @@ def get_setting(key: str, default: str = "") -> str:
         return str(row["val_text"]) if row and row["val_text"] is not None else default
 
 
-def get_user(user_id: int, first_name: str = "Kh\xe1ch", username: str = "") -> dict:
+# ============================================================
+# USERS
+# ============================================================
+
+def get_user(user_id: int, first_name: str = "Khách", username: str = "") -> dict:
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -176,6 +188,10 @@ def update_user_fields(user_id: int, **kwargs) -> None:
         conn.commit()
 
 
+# ============================================================
+# DOS
+# ============================================================
+
 def get_next_do_name() -> str:
     with get_conn() as conn:
         rows = conn.execute("SELECT name FROM dos").fetchall()
@@ -188,7 +204,7 @@ def get_next_do_name() -> str:
     next_num = 1
     while next_num in used_nums:
         next_num += 1
-    return f"\u0110\u1ed9 {next_num}"
+    return f"Độ {next_num}"
 
 
 def get_do_by_id(do_id: int) -> dict | None:
@@ -204,14 +220,32 @@ def get_do_by_name(name: str) -> dict | None:
 
 
 def get_open_dos() -> list[dict]:
+    """Chỉ trả về các độ đang OPEN."""
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
+        if not rows:
+            next_name = get_next_do_name()
+            conn.execute(
+                """
+                INSERT INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
+                VALUES (?, 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
+                """,
+                (next_name,),
+            )
+            conn.commit()
+            rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
         return [dict(r) for r in rows]
 
 
 def get_unsettled_dos() -> list[dict]:
+    """
+    Trả về các độ CHƯA CHỐT: OPEN + HOLD.
+    Dùng cho logic tính hạn mức song song nhiều độ.
+    """
     with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM dos WHERE status IN ('OPEN', 'HOLD') ORDER BY id ASC").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM dos WHERE status IN ('OPEN', 'HOLD') ORDER BY id ASC"
+        ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -223,9 +257,6 @@ def create_new_do(
     do_lose: float = 10.0,
 ) -> dict:
     do_name = name or get_next_do_name()
-    existing = get_do_by_name(do_name)
-    if existing and existing["status"] == "CLOSED":
-        raise ValueError("\u0110\u1ed9 \u0111\xe3 ch\u1ed1t kh\xf4ng th\u1ec3 m\u1edf l\u1ea1i")
     with get_conn() as conn:
         conn.execute(
             """
@@ -255,22 +286,9 @@ def update_do(do_id: int, **kwargs) -> None:
         conn.commit()
 
 
-def add_bet_and_advance_seq(do_id: int, expected_seq: int, code: str,
-                            do_name: str, user_id: int, side: str,
-                            amount: float, win_net: float, lose_amount: float,
-                            price_str: str) -> None:
-    """L\u01b0u m\xe3 c\u01b0\u1ee3c v\xe0 t\u0103ng s\u1ed1 th\u1ee9 t\u1ef1 trong c\xf9ng m\u1ed9t giao d\u1ecbch."""
-    with get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        do = conn.execute("SELECT status, bet_seq FROM dos WHERE id=? AND name=?", (do_id, do_name)).fetchone()
-        if not do or do["status"] != "OPEN" or int(do["bet_seq"]) != expected_seq:
-            raise ValueError("\u0110\u1ed9 ho\u1eb7c s\u1ed1 th\u1ee9 t\u1ef1 \u0111\xe3 thay \u0111\u1ed5i; h\xe3y th\u1eed l\u1ea1i")
-        conn.execute("""INSERT INTO bets (code, do_name, user_id, side, amount,
-                       win_net, lose_amount, price_str, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')""",
-                     (code, do_name, user_id, side, amount, win_net, lose_amount, price_str))
-        conn.execute("UPDATE dos SET bet_seq=? WHERE id=?", (expected_seq + 1, do_id))
-
+# ============================================================
+# BETS
+# ============================================================
 
 def add_bet_record(
     code: str,
@@ -291,6 +309,48 @@ def add_bet_record(
             (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
         )
         conn.commit()
+
+
+def add_bet_and_advance_seq(
+    do_id: int,
+    expected_seq: int,
+    code: str,
+    do_name: str,
+    user_id: int,
+    side: str,
+    amount: float,
+    win_net: float,
+    lose_amount: float,
+    price_str: str,
+) -> None:
+    """
+    Thêm bet + tăng bet_seq trong 1 lock (atomic với các thread khác).
+    Nếu bet_seq đã thay đổi (race condition) → raise RuntimeError để caller retry.
+    """
+    with _bet_lock:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT bet_seq FROM dos WHERE id = ?", (do_id,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError(f"Không tìm thấy độ id={do_id}")
+            if int(row["bet_seq"]) != expected_seq:
+                raise RuntimeError(
+                    f"bet_seq conflict: expected={expected_seq}, actual={row['bet_seq']}"
+                )
+            cur.execute(
+                """
+                INSERT INTO bets (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+                """,
+                (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
+            )
+            cur.execute(
+                "UPDATE dos SET bet_seq = ? WHERE id = ?",
+                (expected_seq + 1, do_id),
+            )
+            conn.commit()
 
 
 def get_active_bets(do_name: str | None = None, user_id: int | None = None) -> list[dict]:
@@ -323,6 +383,10 @@ def update_bet_status(bet_id: int, status: str) -> None:
         conn.execute("UPDATE bets SET status = ? WHERE id = ?", (status, bet_id))
         conn.commit()
 
+
+# ============================================================
+# WITHDRAWALS
+# ============================================================
 
 def create_withdrawal(
     user_id: int,
@@ -361,6 +425,10 @@ def update_withdrawal(w_id: int, **kwargs) -> None:
         conn.commit()
 
 
+# ============================================================
+# SETTLED DOS
+# ============================================================
+
 def insert_settled_do(do_name: str, result: str, summary_text: str, day_key: str, settled_at: str) -> None:
     with get_conn() as conn:
         conn.execute(
@@ -387,6 +455,10 @@ def clear_settled_dos_by_day(day_key: str) -> None:
         conn.execute("DELETE FROM settled_dos WHERE day_key = ?", (day_key,))
         conn.commit()
 
+
+# ============================================================
+# SYSTEM META
+# ============================================================
 
 def get_realized_profit() -> float:
     with get_conn() as conn:
