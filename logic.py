@@ -21,8 +21,8 @@ def fmt_signed(val: float) -> str:
 def calc_fee_and_net_profit(gross_profit: float) -> dict:
     """
     Nguyên tắc khấu trừ 5%:
-    - Chỉ tính trên lợi nhuận trước khấu trừ.
-    - Khấu trừ = lợi nhuận * 5%, thực nhận = lợi nhuận * 95%.
+- Chỉ tính trên lợi nhuận trước khấu trừ.
+- Khấu trừ = lợi nhuận * 5%, thực nhận = lợi nhuận * 95%.
     """
     profit = max(0.0, float(gross_profit))
     fee_amount = profit * FEE_RATE
@@ -185,6 +185,76 @@ def build_parallel_do_notice(do_name: str | None = None) -> str:
     )
 
 
+def _max_side_amount_within_capacity(
+    user_id: int,
+    do: dict,
+    side: str,
+    open_dos: list[dict],
+    base_upper: float,
+    max_capacity: float,
+) -> float:
+    """
+    Siết số tiền có thể đặt thêm của `side` sao cho:
+    1) Không vượt `base_upper` (vốn gốc còn dư + lời ròng cửa đối diện).
+    2) Tổng rủi ro xấu nhất của các độ chưa chốt không vượt `max_capacity`.
+    """
+    if base_upper <= 0.0:
+        return 0.0
+
+    other_risk = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in open_dos
+        if d["id"] != do["id"]
+    )
+    remain_risk = max(0.0, max_capacity - other_risk)
+    if remain_risk <= 1e-9:
+        return 0.0
+
+    bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
+    xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
+    xanh_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH")
+    do_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "DO")
+    do_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "DO")
+
+    win_u, lose_u = get_side_price(do, side)
+    unit = calc_bet_numbers(1.0, win_u, lose_u)
+    u_win = float(unit["win_net"])
+    u_lose = float(unit["lose_amount"])
+
+    # Nếu đặt thêm vào XANH:
+    # - Nếu ĐỎ thắng: lỗ là (xanh_lose + u_lose * amt) - do_win_net
+    # - Nếu XANH thắng: lỗ là do_lose - (xanh_win_net + u_win * amt)
+    if side == "XANH":
+        cur_loss_if_do = xanh_lose - do_win_net
+        if u_lose > 1e-12:
+            cap_by_do = max(0.0, (remain_risk - cur_loss_if_do) / u_lose)
+        else:
+            cap_by_do = base_upper
+
+        cur_loss_if_xanh = do_lose - xanh_win_net
+        if cur_loss_if_xanh > remain_risk and u_win > 1e-12:
+            cap_by_xanh = max(0.0, (cur_loss_if_xanh - remain_risk) / u_win)
+        else:
+            cap_by_xanh = base_upper
+
+        return max(0.0, min(base_upper, cap_by_do, cap_by_xanh))
+
+    # Nếu đặt thêm vào ĐỎ:
+    cur_loss_if_xanh = do_lose - xanh_win_net
+    if u_lose > 1e-12:
+        cap_by_xanh = max(0.0, (remain_risk - cur_loss_if_xanh) / u_lose)
+    else:
+        cap_by_xanh = base_upper
+
+    cur_loss_if_do = xanh_lose - do_win_net
+    if cur_loss_if_do > remain_risk and u_win > 1e-12:
+        cap_by_do = max(0.0, (cur_loss_if_do - remain_risk) / u_win)
+    else:
+        cap_by_do = base_upper
+
+    return max(0.0, min(base_upper, cap_by_xanh, cap_by_do))
+
+
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
     Tính hạn mức còn đặt được của cửa XANH và ĐỎ:
@@ -222,12 +292,22 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         if not do or d["id"] != do["id"]
     )
 
-    # Tiền gốc còn dư của tài khoản sau khi trừ rủi ro xấu nhất đang khóa
-    remaining_capital = max(0.0, max_capacity - other_risk - cur_do_locked_capital)
+    locked_capital = other_risk + cur_do_locked_capital
+    remaining_capital = max(0.0, max_capacity - locked_capital)
 
-    # Hạn mức còn lại cho mã tiếp theo của mỗi cửa = tiền gốc còn dư + lời ròng cửa đối diện
-    max_xanh = max(0.0, remaining_capital + do_win_net_sum)
-    max_do = max(0.0, remaining_capital + xanh_win_net_sum)
+    raw_max_xanh = max(0.0, remaining_capital + do_win_net_sum)
+    raw_max_do = max(0.0, remaining_capital + xanh_win_net_sum)
+
+    if do:
+        max_xanh = _max_side_amount_within_capacity(
+            user_id, do, "XANH", open_dos, raw_max_xanh, max_capacity
+        )
+        max_do = _max_side_amount_within_capacity(
+            user_id, do, "DO", open_dos, raw_max_do, max_capacity
+        )
+    else:
+        max_xanh = raw_max_xanh
+        max_do = raw_max_do
 
     xanh_total_cap = xanh_lose_sum + max_xanh
     do_total_cap = do_lose_sum + max_do
@@ -239,7 +319,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "all_open_bets": all_open_bets,
         "max_capacity": max_capacity,
         "total_open_principal": sum(float(b["amount"]) for b in all_open_bets),
-        "locked_capital": other_risk + cur_do_locked_capital,
+        "locked_capital": locked_capital,
         "base_unused": remaining_capital,
         "edge_bonus": 0.0,
         "unused_capital": remaining_capital,
@@ -431,7 +511,7 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     current_do_worst_loss = max_worst_case_loss(user_id, do["name"], extra_bet={"side": side_norm, **calc})
     total_worst_loss = other_dos_worst_loss + current_do_worst_loss
 
-    hard_risk_cap = max_capacity + opp_win_net_sum
+    hard_risk_cap = max_capacity
     if total_worst_loss > hard_risk_cap + 1e-6:
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
@@ -458,13 +538,13 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         price_str=price_str,
     )
 
-    side_label = "🟢 XANH" if side_norm == "XANH" else "🔴 ĐỎ"
+    side_label = "\U0001f7e2 XANH" if side_norm == "XANH" else "\U0001f534 ĐỎ"
     msg = (
-        f"✅ <b>ĐÃ NHẬN KÈO — {do['name']} | {side_label}</b>\n"
-        f"• Mã: <b>{code}</b> | Giá lúc đặt: <b>{price_str}</b>\n"
-        f"• Mức đánh: <b>{fmt_num(amount)}</b> (Thua mã này: <b>{fmt_num(calc['lose_amount'])}</b>)\n"
-        f"• Nếu {side_label} thắng: lời <b>{fmt_num(calc['win_net'])}</b> <i>(đã trừ 5% phế)</i>\n"
-        f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
+        f"\u2705 <b>ĐÃ NHẬN KÈO — {do['name']} | {side_label}</b>\n"
+        f"\u2022 Mã: <b>{code}</b> | Giá lúc đặt: <b>{price_str}</b>\n"
+        f"\u2022 Mức đánh: <b>{fmt_num(amount)}</b> (Thua mã này: <b>{fmt_num(calc['lose_amount'])}</b>)\n"
+        f"\u2022 Nếu {side_label} thắng: lời <b>{fmt_num(calc['win_net'])}</b> <i>(đã trừ 5% phế)</i>\n"
+        f"\u2022 Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
 
