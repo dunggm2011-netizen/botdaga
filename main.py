@@ -87,20 +87,20 @@ def build_vietqr_url(user_id: int, amount: float) -> str:
     )
 
 
-# ==================== Bá» NÃT Báº¤M ====================
+# ==================== B\u1ed8 N\xdaT B\u1ea4M ====================
 def kb_user_main(user_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("ð³ Náº¡p tiá»n", callback_data="u_deposit"),
-        types.InlineKeyboardButton("ð¸ RÃºt tiá»n", callback_data="u_withdraw"),
+        types.InlineKeyboardButton("\U0001f4b3 N\u1ea1p ti\u1ec1n", callback_data="u_deposit"),
+        types.InlineKeyboardButton("\U0001f4b8 R\xfat ti\u1ec1n", callback_data="u_withdraw"),
     )
     kb.add(
-        types.InlineKeyboardButton("ð¢ ÄÃ¡nh XANH", callback_data="u_side_XANH"),
-        types.InlineKeyboardButton("ð´ ÄÃ¡nh Äá»", callback_data="u_side_DO"),
+        types.InlineKeyboardButton("\U0001f7e2 \u0110\xe1nh XANH", callback_data="u_side_XANH"),
+        types.InlineKeyboardButton("\U0001f534 \u0110\xe1nh \u0110\u1ece", callback_data="u_side_DO"),
     )
-    kb.add(types.InlineKeyboardButton("ð° Sá» dÆ° & MÃ£ Äang ÄÃ¡nh", callback_data="u_wallet"))
+    kb.add(types.InlineKeyboardButton("\U0001f4b0 S\u1ed1 d\u01b0 & M\xe3 \u0111ang \u0111\xe1nh", callback_data="u_wallet"))
     if is_admin(user_id):
-        kb.add(types.InlineKeyboardButton("ð ï¸ Menu Admin (Chat riÃªng)", callback_data="a_panel_open"))
+        kb.add(types.InlineKeyboardButton("\U0001f6e0\ufe0f Menu Admin (Chat ri\xeang)", callback_data="a_panel_open"))
     return kb
 
 
@@ -119,7 +119,7 @@ def kb_user_do_picker(side: str) -> types.InlineKeyboardMarkup:
                 callback_data=f"u_pickdo_{side}_{d_id}",
             )
         )
-    kb.add(types.InlineKeyboardButton("ð Quay láº¡i", callback_data="u_back"))
+    kb.add(types.InlineKeyboardButton("\U0001f519 Quay l\u1ea1i", callback_data="u_back"))
     return kb
 
 
@@ -131,8 +131,8 @@ def kb_deposit_amounts() -> types.InlineKeyboardMarkup:
     ]
     kb.add(*btns)
     kb.add(
-        types.InlineKeyboardButton("âï¸ Nháº­p sá» khÃ¡c", callback_data="u_dep_custom"),
-        types.InlineKeyboardButton("ð Quay láº¡i", callback_data="u_back"),
+        types.InlineKeyboardButton("\u270f\ufe0f Nh\u1eadp s\u1ed1 kh\xe1c", callback_data="u_dep_custom"),
+        types.InlineKeyboardButton("\U0001f519 Quay l\u1ea1i", callback_data="u_back"),
     )
     return kb
 
@@ -140,8 +140,8 @@ def kb_deposit_amounts() -> types.InlineKeyboardMarkup:
 def kb_user_deposit() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("â TÃ´i ÄÃ£ chuyá»n", callback_data="u_paid"),
-        types.InlineKeyboardButton("ð Quay láº¡i", callback_data="u_back"),
+        types.InlineKeyboardButton("\u2705 T\xf4i \u0111\xe3 chuy\u1ec3n", callback_data="u_paid"),
+        types.InlineKeyboardButton("\U0001f519 Quay l\u1ea1i", callback_data="u_back"),
     )
     return kb
 
@@ -154,8 +154,8 @@ def kb_user_amounts(side: str, do_id: int) -> types.InlineKeyboardMarkup:
     ]
     kb.add(*btns)
     kb.add(
-        types.InlineKeyboardButton("âï¸ Nháº­p sá» khÃ¡c", callback_data=f"u_custom_{side}_{do_id}"),
-        types.InlineKeyboardButton("ð Quay láº¡i", callback_data="u_back"),
+        types.InlineKeyboardButton("\u270f\ufe0f Nh\u1eadp s\u1ed1 kh\xe1c", callback_data=f"u_custom_{side}_{do_id}"),
+        types.InlineKeyboardButton("\U0001f519 Quay l\u1ea1i", callback_data="u_back"),
     )
     return kb
 
@@ -169,10 +169,10 @@ def kb_withdraw_amounts(bal: float) -> types.InlineKeyboardMarkup:
     ]
     if btns:
         kb.add(*btns)
-    kb.add(types.InlineKeyboardButton(f"ð° RÃºt háº¿t vÃ­ ({fmt_num(bal)})", callback_data="u_wd_all"))
+    kb.add(types.InlineKeyboardButton(f"\U0001f4b0 R\xfat h\u1ebft v\xed ({fmt_num(bal)})", callback_data="u_wd_all"))
     kb.add(
-        types.InlineKeyboardButton("âï¸ Nháº­p sá» rÃºt khÃ¡c", callback_data="u_wd_custom"),
-        types.InlineKeyboardButton("ð Quay láº¡i", callback_data="u_back"),
+        types.InlineKeyboardButton("\u270f\ufe0f Nh\u1eadp s\u1ed1 r\xfat kh\xe1c", callback_data="u_wd_custom"),
+        types.InlineKeyboardButton("\U0001f519 Quay l\u1ea1i", callback_data="u_back"),
     )
     return kb
 
@@ -180,27 +180,27 @@ def kb_withdraw_amounts(bal: float) -> types.InlineKeyboardMarkup:
 def kb_master_viewer_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("ð Äá» Äang cháº¡y", callback_data="a_rep_live"),
-        types.InlineKeyboardButton("ð Än thua tá»«ng Äá» / HT", callback_data="a_rep_pnl"),
+        types.InlineKeyboardButton("\U0001f4cb \u0110\u1ed9 \u0111ang ch\u1ea1y", callback_data="a_rep_live"),
+        types.InlineKeyboardButton("\U0001f4c8 \u0102n thua t\u1eebng \u0111\u1ed9 / HT", callback_data="a_rep_pnl"),
     )
-    kb.add(types.InlineKeyboardButton("ð BÃ¡o cÃ¡o Än thua cáº£ ngÃ y", callback_data="a_rep_daily"))
+    kb.add(types.InlineKeyboardButton("\U0001f4ca B\xe1o c\xe1o \u0103n thua c\u1ea3 ng\xe0y", callback_data="a_rep_daily"))
     return kb
 
 
 def kb_master_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("ð Äá» Äang cháº¡y", callback_data="a_rep_live"),
-        types.InlineKeyboardButton("ð Än thua tá»«ng Äá» / HT", callback_data="a_rep_pnl"),
+        types.InlineKeyboardButton("\U0001f4cb \u0110\u1ed9 \u0111ang ch\u1ea1y", callback_data="a_rep_live"),
+        types.InlineKeyboardButton("\U0001f4c8 \u0102n thua t\u1eebng \u0111\u1ed9 / HT", callback_data="a_rep_pnl"),
     )
-    kb.add(types.InlineKeyboardButton("ð BÃ¡o cÃ¡o Än thua cáº£ ngÃ y", callback_data="a_rep_daily"))
+    kb.add(types.InlineKeyboardButton("\U0001f4ca B\xe1o c\xe1o \u0103n thua c\u1ea3 ng\xe0y", callback_data="a_rep_daily"))
     kb.add(
-        types.InlineKeyboardButton("ð³ Cáº¥p háº¡n má»©c ná»£", callback_data="a_set_debt_limit"),
-        types.InlineKeyboardButton("ðµ Thu ná»£ / XÃ³a ná»£", callback_data="a_debt_menu"),
+        types.InlineKeyboardButton("\U0001f4b3 C\u1ea5p h\u1ea1n m\u1ee9c n\u1ee3", callback_data="a_set_debt_limit"),
+        types.InlineKeyboardButton("\U0001f4b5 Thu n\u1ee3 / X\xf3a n\u1ee3", callback_data="a_debt_menu"),
     )
     kb.add(
-        types.InlineKeyboardButton("ð¤ Chá» Äá»nh duyá»t", callback_data="a_assign_approver"),
-        types.InlineKeyboardButton("ð Chá»t sá» cuá»i ngÃ y", callback_data="a_day_reset"),
+        types.InlineKeyboardButton("\U0001f464 Ch\u1ec9 \u0111\u1ecbnh duy\u1ec7t", callback_data="a_assign_approver"),
+        types.InlineKeyboardButton("\U0001f319 Ch\u1ed1t s\u1ed5 cu\u1ed1i ng\xe0y", callback_data="a_day_reset"),
     )
     return kb
 
@@ -208,38 +208,38 @@ def kb_master_panel() -> types.InlineKeyboardMarkup:
 def kb_price_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("â Má» Äá» má»i", callback_data="a_new_do"),
-        types.InlineKeyboardButton("âï¸ Äá»i giÃ¡ Äá»", callback_data="a_set_price"),
+        types.InlineKeyboardButton("\u2795 M\u1edf \u0111\u1ed9 m\u1edbi", callback_data="a_new_do"),
+        types.InlineKeyboardButton("\u270f\ufe0f \u0110\u1ed5i gi\xe1 \u0111\u1ed9", callback_data="a_set_price"),
     )
-    kb.add(types.InlineKeyboardButton("ð Chá»t Äá» / Nhiá»u Äá»", callback_data="a_multi_close_open"))
+    kb.add(types.InlineKeyboardButton("\U0001f3c1 Ch\u1ed1t \u0111\u1ed9 / Nhi\u1ec1u \u0111\u1ed9", callback_data="a_multi_close_open"))
     return kb
 
 
 def kb_bill_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(types.InlineKeyboardButton("ð¤ Chá» Äá»nh nhÃ¢n viÃªn duyá»t", callback_data="a_assign_approver"))
+    kb.add(types.InlineKeyboardButton("\U0001f464 Ch\u1ec9 \u0111\u1ecbnh nh\xe2n vi\xean duy\u1ec7t", callback_data="a_assign_approver"))
     return kb
 
 
 def kb_full_admin_panel() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("ð Äá» Äang cháº¡y", callback_data="a_rep_live"),
-        types.InlineKeyboardButton("ð Än thua tá»«ng Äá» / HT", callback_data="a_rep_pnl"),
+        types.InlineKeyboardButton("\U0001f4cb \u0110\u1ed9 \u0111ang ch\u1ea1y", callback_data="a_rep_live"),
+        types.InlineKeyboardButton("\U0001f4c8 \u0102n thua t\u1eebng \u0111\u1ed9 / HT", callback_data="a_rep_pnl"),
     )
-    kb.add(types.InlineKeyboardButton("ð BÃ¡o cÃ¡o Än thua cáº£ ngÃ y", callback_data="a_rep_daily"))
+    kb.add(types.InlineKeyboardButton("\U0001f4ca B\xe1o c\xe1o \u0103n thua c\u1ea3 ng\xe0y", callback_data="a_rep_daily"))
     kb.add(
-        types.InlineKeyboardButton("â Má» Äá» má»i", callback_data="a_new_do"),
-        types.InlineKeyboardButton("âï¸ Äá»i giÃ¡ Äá»", callback_data="a_set_price"),
+        types.InlineKeyboardButton("\u2795 M\u1edf \u0111\u1ed9 m\u1edbi", callback_data="a_new_do"),
+        types.InlineKeyboardButton("\u270f\ufe0f \u0110\u1ed5i gi\xe1 \u0111\u1ed9", callback_data="a_set_price"),
     )
-    kb.add(types.InlineKeyboardButton("ð Chá»t Äá» / Nhiá»u Äá»", callback_data="a_multi_close_open"))
+    kb.add(types.InlineKeyboardButton("\U0001f3c1 Ch\u1ed1t \u0111\u1ed9 / Nhi\u1ec1u \u0111\u1ed9", callback_data="a_multi_close_open"))
     kb.add(
-        types.InlineKeyboardButton("ð³ Cáº¥p háº¡n má»©c ná»£", callback_data="a_set_debt_limit"),
-        types.InlineKeyboardButton("ðµ Thu ná»£ / XÃ³a ná»£", callback_data="a_debt_menu"),
+        types.InlineKeyboardButton("\U0001f4b3 C\u1ea5p h\u1ea1n m\u1ee9c n\u1ee3", callback_data="a_set_debt_limit"),
+        types.InlineKeyboardButton("\U0001f4b5 Thu n\u1ee3 / X\xf3a n\u1ee3", callback_data="a_debt_menu"),
     )
     kb.add(
-        types.InlineKeyboardButton("ð¤ Chá» Äá»nh duyá»t", callback_data="a_assign_approver"),
-        types.InlineKeyboardButton("ð Chá»t sá» cuá»i ngÃ y", callback_data="a_day_reset"),
+        types.InlineKeyboardButton("\U0001f464 Ch\u1ec9 \u0111\u1ecbnh duy\u1ec7t", callback_data="a_assign_approver"),
+        types.InlineKeyboardButton("\U0001f319 Ch\u1ed1t s\u1ed5 cu\u1ed1i ng\xe0y", callback_data="a_day_reset"),
     )
     return kb
 
@@ -254,15 +254,15 @@ def kb_price_do_picker() -> types.InlineKeyboardMarkup:
                 callback_data=f"a_pdo_one_{d_id}",
             )
         )
-    kb.add(types.InlineKeyboardButton("ð Äá»i chung táº¥t cáº£ Äá» má»", callback_data="a_pdo_all"))
+    kb.add(types.InlineKeyboardButton("\U0001f310 \u0110\u1ed5i chung t\u1ea5t c\u1ea3 \u0111\u1ed9 m\u1edf", callback_data="a_pdo_all"))
     return kb
 
 
 def kb_price_side_picker(do_target: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("ð¢ Chá»n cá»­a XANH", callback_data=f"a_pside_XANH_{do_target}"),
-        types.InlineKeyboardButton("ð´ Chá»n cá»­a Äá»", callback_data=f"a_pside_DO_{do_target}"),
+        types.InlineKeyboardButton("\U0001f7e2 Ch\u1ecdn c\u1eeda XANH", callback_data=f"a_pside_XANH_{do_target}"),
+        types.InlineKeyboardButton("\U0001f534 Ch\u1ecdn c\u1eeda \u0110\u1ece", callback_data=f"a_pside_DO_{do_target}"),
     )
     return kb
 
@@ -270,11 +270,11 @@ def kb_price_side_picker(do_target: str) -> types.InlineKeyboardMarkup:
 def kb_open_do_picker() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=4)
     btns = [
-        types.InlineKeyboardButton(f"Äá» {i}", callback_data=f"a_open_num_{i}")
+        types.InlineKeyboardButton(f"\u0110\u1ed9 {i}", callback_data=f"a_open_num_{i}")
         for i in range(1, 9)
     ]
     kb.add(*btns)
-    kb.add(types.InlineKeyboardButton("âï¸ Nháº­p sá» Äá» khÃ¡c", callback_data="a_open_custom"))
+    kb.add(types.InlineKeyboardButton("\u270d\ufe0f Nh\u1eadp s\u1ed1 \u0111\u1ed9 kh\xe1c", callback_data="a_open_custom"))
     return kb
 
 
@@ -282,7 +282,7 @@ def kb_multi_close_picker(selected_ids: set[int]) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     for d in db.get_open_dos():
         d_id = int(d["id"])
-        mark = "â" if d_id in selected_ids else "â¬"
+        mark = "\u2705" if d_id in selected_ids else "\u2b1c"
         kb.add(
             types.InlineKeyboardButton(
                 f"{mark} {d['name']} ({float(d['xanh_win']):g}/{float(d['xanh_lose']):g})",
@@ -290,14 +290,14 @@ def kb_multi_close_picker(selected_ids: set[int]) -> types.InlineKeyboardMarkup:
             )
         )
     kb.add(
-        types.InlineKeyboardButton("â¡ Chá»n táº¥t cáº£", callback_data="a_mclose_all"),
-        types.InlineKeyboardButton("ðï¸ Bá» chá»n", callback_data="a_mclose_clear"),
+        types.InlineKeyboardButton("\u26a1 Ch\u1ecdn t\u1ea5t c\u1ea3", callback_data="a_mclose_all"),
+        types.InlineKeyboardButton("\U0001f5d1\ufe0f B\u1ecf ch\u1ecdn", callback_data="a_mclose_clear"),
     )
     kb.add(
-        types.InlineKeyboardButton("ð¢ XANH tháº¯ng", callback_data="a_mclose_run_XANH"),
-        types.InlineKeyboardButton("ð´ Äá» tháº¯ng", callback_data="a_mclose_run_DO"),
-        types.InlineKeyboardButton("ð¤ HÃ²a", callback_data="a_mclose_run_DRAW"),
-        types.InlineKeyboardButton("ð« Há»§y Äá»", callback_data="a_mclose_run_CANCEL"),
+        types.InlineKeyboardButton("\U0001f7e2 XANH th\u1eafng", callback_data="a_mclose_run_XANH"),
+        types.InlineKeyboardButton("\U0001f534 \u0110\u1ece th\u1eafng", callback_data="a_mclose_run_DO"),
+        types.InlineKeyboardButton("\U0001f91d H\xf2a", callback_data="a_mclose_run_DRAW"),
+        types.InlineKeyboardButton("\U0001f6ab H\u1ee7y \u0111\u1ed9", callback_data="a_mclose_run_CANCEL"),
     )
     return kb
 
@@ -305,10 +305,10 @@ def kb_multi_close_picker(selected_ids: set[int]) -> types.InlineKeyboardMarkup:
 def kb_approve_deposit(user_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("â Duyá»t cá»ng tiá»n", callback_data=f"a_dep_ok_{user_id}"),
-        types.InlineKeyboardButton("â Tá»« chá»i", callback_data=f"a_dep_no_{user_id}"),
+        types.InlineKeyboardButton("\u2705 Duy\u1ec7t c\u1ed9ng ti\u1ec1n", callback_data=f"a_dep_ok_{user_id}"),
+        types.InlineKeyboardButton("\u274c T\u1eeb ch\u1ed1i", callback_data=f"a_dep_no_{user_id}"),
     )
-    kb.add(types.InlineKeyboardButton("ð Chá» Äá»nh ngÆ°á»i duyá»t", callback_data="a_assign_approver"))
+    kb.add(types.InlineKeyboardButton("\U0001f504 Ch\u1ec9 \u0111\u1ecbnh ng\u01b0\u1eddi duy\u1ec7t", callback_data="a_assign_approver"))
     return kb
 
 
@@ -317,7 +317,7 @@ def kb_deposit_presets(user_id: int, suggested_amt: float = 0.0) -> types.Inline
     if suggested_amt > 0:
         kb.add(
             types.InlineKeyboardButton(
-                f"â ÄÃºng sá» khÃ¡ch chá»n (+{fmt_num(suggested_amt)})",
+                f"\u2705 \u0110\xfang s\u1ed1 kh\xe1ch ch\u1ecdn (+{fmt_num(suggested_amt)})",
                 callback_data=f"a_dep_amt_{user_id}_{suggested_amt}",
             )
         )
@@ -326,17 +326,17 @@ def kb_deposit_presets(user_id: int, suggested_amt: float = 0.0) -> types.Inline
         for amt in [250000, 500000, 1000000, 2000000, 5000000, 10000000]
     ]
     kb.add(*btns)
-    kb.add(types.InlineKeyboardButton("âï¸ Nháº­p sá» tiá»n khÃ¡c", callback_data=f"a_dep_custom_{user_id}"))
+    kb.add(types.InlineKeyboardButton("\u270f\ufe0f Nh\u1eadp s\u1ed1 ti\u1ec1n kh\xe1c", callback_data=f"a_dep_custom_{user_id}"))
     return kb
 
 
 def kb_withdrawal_actions(w_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("â ÄÃ£ chuyá»n tiá»n", callback_data=f"a_wd_ok_{w_id}"),
-        types.InlineKeyboardButton("â Tá»« chá»i rÃºt", callback_data=f"a_wd_no_{w_id}"),
+        types.InlineKeyboardButton("\u2705 \u0110\xe3 chuy\u1ec3n ti\u1ec1n", callback_data=f"a_wd_ok_{w_id}"),
+        types.InlineKeyboardButton("\u274c T\u1eeb ch\u1ed1i r\xfat", callback_data=f"a_wd_no_{w_id}"),
     )
-    kb.add(types.InlineKeyboardButton("ð Chá» Äá»nh ngÆ°á»i duyá»t", callback_data="a_assign_approver"))
+    kb.add(types.InlineKeyboardButton("\U0001f504 Ch\u1ec9 \u0111\u1ecbnh ng\u01b0\u1eddi duy\u1ec7t", callback_data="a_assign_approver"))
     return kb
 
 
@@ -355,19 +355,19 @@ def get_panel_by_chat(chat_id: int, chat_type: str, user_id: int = 0) -> types.I
 def open_bet_amount_menu(chat_id: int, uid: int, u: dict, side: str, do_id: int) -> None:
     do = db.get_do_by_id(do_id)
     if not do or do["status"] != "OPEN":
-        bot.send_message(chat_id, "Äá» nÃ y ÄÃ£ ÄÃ³ng hoáº·c khÃ´ng tá»n táº¡i.", reply_markup=kb_user_main(uid))
+        bot.send_message(chat_id, "\u0110\u1ed9 n\xe0y \u0111\xe3 \u0111\xf3ng ho\u1eb7c kh\xf4ng t\u1ed3n t\u1ea1i.", reply_markup=kb_user_main(uid))
         return
     win_u = float(do["xanh_win"] if side == "XANH" else do["do_win"])
     lose_u = float(do["xanh_lose"] if side == "XANH" else do["do_lose"])
     lim = get_user_betting_limit_info(uid, do_id=do_id)
     max_side = lim["max_xanh"] if side == "XANH" else lim["max_do"]
-    side_label = "ð¢ XANH" if side == "XANH" else "ð´ Äá»"
+    side_label = "\U0001f7e2 XANH" if side == "XANH" else "\U0001f534 \u0110\u1ece"
     txt = (
-        f"<b>{do['name']} â Cá»¬A {side_label}</b>\n"
-        f"â¢ GiÃ¡ hiá»n táº¡i: <b>{win_u:g}/{lose_u:g}</b> <i>(trá»« 5% pháº¿ trÃªn tiá»n lá»i)</i>\n"
-        f"â¢ Háº¡n má»©c tá»i Äa cá»­a {side_label}: <b>{fmt_num(max_side)}</b>\n"
-        f"â¢ VÃ­: <b>{fmt_num(float(u['balance']))}</b> | Ná»£: <b>{fmt_num(float(u['debt']))}/{fmt_num(float(u['debt_limit']))}</b>\n\n"
-        f"Chá»n má»©c tiá»n nhanh hoáº·c báº¥m <b>Nháº­p sá» khÃ¡c</b>:"
+        f"<b>{do['name']} \u2014 C\u1eecA {side_label}</b>\n"
+        f"\u2022 Gi\xe1 hi\u1ec7n t\u1ea1i: <b>{win_u:g}/{lose_u:g}</b> <i>(tr\u1eeb 5% ph\u1ebf tr\xean ti\u1ec1n l\u1eddi)</i>\n"
+        f"\u2022 H\u1ea1n m\u1ee9c t\u1ed1i \u0111a c\u1eeda {side_label}: <b>{fmt_num(max_side)}</b>\n"
+        f"\u2022 V\xed: <b>{fmt_num(float(u['balance']))}</b> | N\u1ee3: <b>{fmt_num(float(u['debt']))}/{fmt_num(float(u['debt_limit']))}</b>\n\n"
+        f"Ch\u1ecdn m\u1ee9c ti\u1ec1n nhanh ho\u1eb7c b\u1ea5m <b>Nh\u1eadp s\u1ed1 kh\xe1c</b>:"
     )
     bot.send_message(chat_id, txt, reply_markup=kb_user_amounts(side, do_id))
 
@@ -378,14 +378,14 @@ def send_deposit_qr(chat_id: int, user_id: int, amount: float) -> None:
     vnd_show = int(round(amount * QR_AMOUNT_MULTIPLIER))
 
     caption = (
-        f"<b>MÃ QR Náº P TIá»N â {BANK_INFO['bank']}</b>\n"
-        f"â¢ NgÃ¢n hÃ ng: <b>{BANK_INFO['bank']}</b>\n"
-        f"â¢ Sá» tÃ i khoáº£n: <code>{BANK_INFO['stk']}</code>\n"
-        f"â¢ Chá»§ tÃ i khoáº£n: <b>{BANK_INFO['owner']}</b>\n"
-        f"â¢ Sá» tiá»n náº¡p: <b>{fmt_num(amount)}</b> (QR: <b>{fmt_num(vnd_show)}Ä</b>)\n"
-        f"â¢ Ná»i dung chuyá»n khoáº£n: <code>{user_id}</code>\n\n"
-        f"QuÃ©t mÃ£ QR hoáº·c chuyá»n khoáº£n ÄÃºng ná»i dung <code>{user_id}</code>, "
-        f"sau ÄÃ³ báº¥m <b>â TÃ´i ÄÃ£ chuyá»n</b> bÃªn dÆ°á»i <i>(cÃ³ thá» gá»­i kÃ¨m áº£nh bill)</i>."
+        f"<b>M\xc3 QR N\u1ea0P TI\u1ec0N \u2014 {BANK_INFO['bank']}</b>\n"
+        f"\u2022 Ng\xe2n h\xe0ng: <b>{BANK_INFO['bank']}</b>\n"
+        f"\u2022 S\u1ed1 t\xe0i kho\u1ea3n: <code>{BANK_INFO['stk']}</code>\n"
+        f"\u2022 Ch\u1ee7 t\xe0i kho\u1ea3n: <b>{BANK_INFO['owner']}</b>\n"
+        f"\u2022 S\u1ed1 ti\u1ec1n n\u1ea1p: <b>{fmt_num(amount)}</b> (QR: <b>{fmt_num(vnd_show)}\u0111</b>)\n"
+        f"\u2022 N\u1ed9i dung chuy\u1ec3n kho\u1ea3n: <code>{user_id}</code>\n\n"
+        f"Qu\xe9t m\xe3 QR ho\u1eb7c chuy\u1ec3n kho\u1ea3n \u0111\xfang n\u1ed9i dung <code>{user_id}</code>, "
+        f"sau \u0111\xf3 b\u1ea5m <b>\u2705 T\xf4i \u0111\xe3 chuy\u1ec3n</b> b\xean d\u01b0\u1edbi <i>(c\xf3 th\u1ec3 g\u1eedi k\xe8m \u1ea3nh bill)</i>."
     )
     try:
         bot.send_photo(chat_id, qr_url, caption=caption, reply_markup=kb_user_deposit())
@@ -397,18 +397,18 @@ def dispatch_withdrawal_to_bill_group(user: dict, w_rec: dict) -> None:
     if not BILL_GROUP_ID:
         return
     assigned_id = int(w_rec["assigned_staff_id"] or 0)
-    approver_txt = f"<code>{assigned_id}</code>" if assigned_id > 0 else "<i>Táº¥t cáº£ nhÃ¢n viÃªn</i>"
+    approver_txt = f"<code>{assigned_id}</code>" if assigned_id > 0 else "<i>T\u1ea5t c\u1ea3 nh\xe2n vi\xean</i>"
     w_id = int(w_rec["id"])
     amt = float(w_rec["amount"])
-    payout_txt = w_rec["payout_text"] or "Xem áº£nh mÃ£ QR ÄÃ­nh kÃ¨m"
+    payout_txt = w_rec["payout_text"] or "Xem \u1ea3nh m\xe3 QR \u0111\xednh k\xe8m"
 
     caption = (
-        f"ð¸ <b>YÃU Cáº¦U RÃT TIá»N (#R{w_id:03d})</b>\n"
-        f"â¢ KhÃ¡ch: <b>{user['name']}</b> (@{user['username'] or 'khÃ´ng_cÃ³'}) | ID: <code>{user['user_id']}</code>\n"
-        f"â¢ Sá» tiá»n rÃºt: <b>{fmt_num(amt)}</b>\n"
-        f"â¢ ThÃ´ng tin nháº­n: <code>{payout_txt}</code>\n"
-        f"â¢ NhÃ¢n viÃªn chá» Äá»nh duyá»t: {approver_txt}\n"
-        f"â¢ Thá»i gian: <code>{w_rec['created_at']}</code>"
+        f"\U0001f4b8 <b>Y\xcaU C\u1ea6U R\xdaT TI\u1ec0N (#R{w_id:03d})</b>\n"
+        f"\u2022 Kh\xe1ch: <b>{user['name']}</b> (@{user['username'] or 'kh\xf4ng_c\xf3'}) | ID: <code>{user['user_id']}</code>\n"
+        f"\u2022 S\u1ed1 ti\u1ec1n r\xfat: <b>{fmt_num(amt)}</b>\n"
+        f"\u2022 Th\xf4ng tin nh\u1eadn: <code>{payout_txt}</code>\n"
+        f"\u2022 Nh\xe2n vi\xean ch\u1ec9 \u0111\u1ecbnh duy\u1ec7t: {approver_txt}\n"
+        f"\u2022 Th\u1eddi gian: <code>{w_rec['created_at']}</code>"
     )
     if w_rec["qr_file_id"]:
         bot.send_photo(BILL_GROUP_ID, w_rec["qr_file_id"], caption=caption, reply_markup=kb_withdrawal_actions(w_id))
@@ -429,12 +429,12 @@ def send_report_to_master(report_type: str, actor_id: int, source_chat_id: int, 
     elif MASTER_GROUP_ID:
         bot.send_message(MASTER_GROUP_ID, report_txt, reply_markup=get_panel_by_chat(MASTER_GROUP_ID, "group", 0))
         if source_chat_type == "private":
-            bot.send_message(source_chat_id, "â ÄÃ£ gá»­i bÃ¡o cÃ¡o vá» <b>nhÃ³m Master</b>.", reply_markup=kb_full_admin_panel())
+            bot.send_message(source_chat_id, "\u2705 \u0110\xe3 g\u1eedi b\xe1o c\xe1o v\u1ec1 <b>nh\xf3m Master</b>.", reply_markup=kb_full_admin_panel())
     else:
         bot.send_message(source_chat_id, report_txt, reply_markup=get_panel_by_chat(source_chat_id, source_chat_type, actor_id))
 
 
-# ==================== Lá»NH KHá»I Táº O ====================
+# ==================== L\u1ec6NH KH\u1edeI T\u1ea0O ====================
 @bot.message_handler(commands=["start", "menu"])
 def cmd_start(message: types.Message):
     uid = message.from_user.id
@@ -444,22 +444,22 @@ def cmd_start(message: types.Message):
     if chat_type == "private":
         u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
         txt = (
-            f"Xin chÃ o <b>{u['name']}</b> (ID: <code>{u['user_id']}</code>)\n"
-            f"â¢ Sá» dÆ° vÃ­: <b>{fmt_num(float(u['balance']))}</b>\n"
-            f"â¢ Háº¡n má»©c ghi ná»£: <b>{fmt_num(float(u['debt']))}</b> / <b>{fmt_num(float(u['debt_limit']))}</b>\n\n"
-            f"Chá»n nÃºt bÃªn dÆ°á»i Äá» thao tÃ¡c:"
+            f"Xin ch\xe0o <b>{u['name']}</b> (ID: <code>{u['user_id']}</code>)\n"
+            f"\u2022 S\u1ed1 d\u01b0 v\xed: <b>{fmt_num(float(u['balance']))}</b>\n"
+            f"\u2022 H\u1ea1n m\u1ee9c ghi n\u1ee3: <b>{fmt_num(float(u['debt']))}</b> / <b>{fmt_num(float(u['debt_limit']))}</b>\n\n"
+            f"Ch\u1ecdn n\xfat b\xean d\u01b0\u1edbi \u0111\u1ec3 thao t\xe1c:"
         )
         bot.send_message(chat_id, txt, reply_markup=kb_user_main(uid))
     elif is_master_group(chat_id):
         bot.send_message(
             chat_id,
-            "<b>Báº¢NG BÃO CÃO & QUáº¢N LÃ NHÃM MASTER</b>",
+            "<b>B\u1ea2NG B\xc1O C\xc1O & QU\u1ea2N L\xdd NH\xd3M MASTER</b>",
             reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
     elif is_admin(uid):
         bot.send_message(
             chat_id,
-            "<b>Báº¢NG ÄIá»U KHIá»N Váº¬N HÃNH</b>",
+            "<b>B\u1ea2NG \u0110I\u1ec0U KHI\u1ec2N V\u1eacN H\xc0NH</b>",
             reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
 
@@ -470,7 +470,7 @@ def cmd_admin(message: types.Message):
     if is_admin(uid) or is_master_group(message.chat.id):
         bot.send_message(
             message.chat.id,
-            "<b>Báº¢NG ÄIá»U KHIá»N</b>",
+            "<b>B\u1ea2NG \u0110I\u1ec0U KHI\u1ec2N</b>",
             reply_markup=get_panel_by_chat(message.chat.id, message.chat.type, uid),
         )
 
@@ -492,7 +492,7 @@ def cmd_report_shortcut(message: types.Message):
     send_report_to_master(rtype, uid, chat_id, chat_type)
 
 
-# ==================== Xá»¬ LÃ NÃT Báº¤M ====================
+# ==================== X\u1eec L\xdd N\xdaT B\u1ea4M ====================
 @bot.callback_query_handler(func=lambda call: True)
 def on_callback(call: types.CallbackQuery):
     data = call.data
@@ -505,7 +505,7 @@ def on_callback(call: types.CallbackQuery):
     # --- USER ACTIONS ---
     if data == "u_back":
         bot.edit_message_text(
-            f"<b>MENU CHÃNH</b> â ID: <code>{uid}</code>\nSá» dÆ° vÃ­: <b>{fmt_num(float(u['balance']))}</b>",
+            f"<b>MENU CH\xcdNH</b> \u2014 ID: <code>{uid}</code>\nS\u1ed1 d\u01b0 v\xed: <b>{fmt_num(float(u['balance']))}</b>",
             chat_id,
             call.message.message_id,
             reply_markup=kb_user_main(uid),
@@ -518,48 +518,48 @@ def on_callback(call: types.CallbackQuery):
             active_bets.extend(db.get_active_bets(do_name=d["name"], user_id=uid))
         bets_txt = "\n".join(
             [
-                f"  â¢ {b['do_name']} | {b['code']} | {b['side']} | {fmt_num(float(b['amount']))} (giÃ¡ {b['price_str']})"
+                f"  \u2022 {b['do_name']} | {b['code']} | {b['side']} | {fmt_num(float(b['amount']))} (gi\xe1 {b['price_str']})"
                 for b in active_bets
             ]
-        ) or "  <i>ChÆ°a cÃ³ mÃ£ nÃ o Äang cháº¡y.</i>"
+        ) or "  <i>Ch\u01b0a c\xf3 m\xe3 n\xe0o \u0111ang ch\u1ea1y.</i>"
 
         if not open_dos:
-            limit_line = f"â¢ Háº¡n má»©c cÃ²n cÆ°á»£c ÄÆ°á»£c: <b>{fmt_num(lim['unused_capital'])}</b>"
+            limit_line = f"\u2022 H\u1ea1n m\u1ee9c c\xf2n c\u01b0\u1ee3c \u0111\u01b0\u1ee3c: <b>{fmt_num(lim['unused_capital'])}</b>"
         elif len(open_dos) == 1:
             d0 = open_dos[0]
             d_lim = get_user_betting_limit_info(uid, do_id=int(d0["id"]))
             limit_line = (
-                f"â¢ Háº¡n má»©c cÃ²n cÆ°á»£c ÄÆ°á»£c ({d0['name']}): "
-                f"ð¢ XANH <b>{fmt_num(d_lim['max_xanh'])}</b> | ð´ Äá» <b>{fmt_num(d_lim['max_do'])}</b>"
+                f"\u2022 H\u1ea1n m\u1ee9c c\xf2n c\u01b0\u1ee3c \u0111\u01b0\u1ee3c ({d0['name']}): "
+                f"\U0001f7e2 XANH <b>{fmt_num(d_lim['max_xanh'])}</b> | \U0001f534 \u0110\u1ece <b>{fmt_num(d_lim['max_do'])}</b>"
             )
         else:
             sub_lines = []
             for d in open_dos:
                 d_lim = get_user_betting_limit_info(uid, do_id=int(d["id"]))
                 sub_lines.append(
-                    f"  - {d['name']}: ð¢ XANH <b>{fmt_num(d_lim['max_xanh'])}</b> | ð´ Äá» <b>{fmt_num(d_lim['max_do'])}</b>"
+                    f"  - {d['name']}: \U0001f7e2 XANH <b>{fmt_num(d_lim['max_xanh'])}</b> | \U0001f534 \u0110\u1ece <b>{fmt_num(d_lim['max_do'])}</b>"
                 )
-            limit_line = "â¢ Háº¡n má»©c cÃ²n cÆ°á»£c ÄÆ°á»£c theo tá»«ng Äá»:\n" + "\n".join(sub_lines)
+            limit_line = "\u2022 H\u1ea1n m\u1ee9c c\xf2n c\u01b0\u1ee3c \u0111\u01b0\u1ee3c theo t\u1eebng \u0111\u1ed9:\n" + "\n".join(sub_lines)
 
         txt = (
-            f"<b>TÃI KHOáº¢N Cá»¦A Báº N</b> (ID: <code>{uid}</code>)\n"
-            f"â¢ Sá» dÆ° vÃ­: <b>{fmt_num(float(u['balance']))}</b>\n"
-            f"â¢ Äang ghi ná»£: <b>{fmt_num(float(u['debt']))}</b> / Háº¡n má»©c <b>{fmt_num(float(u['debt_limit']))}</b>\n"
+            f"<b>T\xc0I KHO\u1ea2N C\u1ee6A B\u1ea0N</b> (ID: <code>{uid}</code>)\n"
+            f"\u2022 S\u1ed1 d\u01b0 v\xed: <b>{fmt_num(float(u['balance']))}</b>\n"
+            f"\u2022 \u0110ang ghi n\u1ee3: <b>{fmt_num(float(u['debt']))}</b> / H\u1ea1n m\u1ee9c <b>{fmt_num(float(u['debt_limit']))}</b>\n"
             f"{limit_line}\n"
-            f"â¢ Än/thua tá»i hiá»n táº¡i: {fmt_signed(float(u['pnl_net']))}\n\n"
-            f"<b>MÃ£ Äang ÄÃ¡nh:</b>\n{bets_txt}"
+            f"\u2022 \u0102n/thua t\u1edbi hi\u1ec7n t\u1ea1i: {fmt_signed(float(u['pnl_net']))}\n\n"
+            f"<b>M\xe3 \u0111ang \u0111\xe1nh:</b>\n{bets_txt}"
         )
         bot.send_message(chat_id, txt, reply_markup=kb_user_main(uid))
 
     elif data == "u_deposit":
         bot.send_message(
             chat_id,
-            f"<b>CHá»N Sá» TIá»N Cáº¦N Náº P</b>\n"
-            f"â¢ Náº¡p tá»i thiá»u: <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>\n"
-            f"â¢ NgÃ¢n hÃ ng: <b>{BANK_INFO['bank']}</b> â STK: <code>{BANK_INFO['stk']}</code>\n"
-            f"â¢ Chá»§ TK: <b>{BANK_INFO['owner']}</b>\n"
-            f"â¢ Ná»i dung CK máº·c Äá»nh: <code>{uid}</code>\n\n"
-            f"Chá»n má»©c tiá»n nhanh hoáº·c báº¥m <b>Nháº­p sá» khÃ¡c</b> Äá» táº¡o mÃ£ QR:",
+            f"<b>CH\u1eccN S\u1ed0 TI\u1ec0N C\u1ea6N N\u1ea0P</b>\n"
+            f"\u2022 N\u1ea1p t\u1ed1i thi\u1ec3u: <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>\n"
+            f"\u2022 Ng\xe2n h\xe0ng: <b>{BANK_INFO['bank']}</b> \u2014 STK: <code>{BANK_INFO['stk']}</code>\n"
+            f"\u2022 Ch\u1ee7 TK: <b>{BANK_INFO['owner']}</b>\n"
+            f"\u2022 N\u1ed9i dung CK m\u1eb7c \u0111\u1ecbnh: <code>{uid}</code>\n\n"
+            f"Ch\u1ecdn m\u1ee9c ti\u1ec1n nhanh ho\u1eb7c b\u1ea5m <b>Nh\u1eadp s\u1ed1 kh\xe1c</b> \u0111\u1ec3 t\u1ea1o m\xe3 QR:",
             reply_markup=kb_deposit_amounts(),
         )
 
@@ -568,7 +568,7 @@ def on_callback(call: types.CallbackQuery):
         if amt < MIN_DEPOSIT_AMOUNT:
             bot.send_message(
                 chat_id,
-                f"â Sá» tiá»n náº¡p tá»i thiá»u lÃ  <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.",
+                f"\u274c S\u1ed1 ti\u1ec1n n\u1ea1p t\u1ed1i thi\u1ec3u l\xe0 <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.",
                 reply_markup=kb_deposit_amounts(),
             )
             return
@@ -578,7 +578,7 @@ def on_callback(call: types.CallbackQuery):
         PENDING_STATE[uid] = {"action": "USER_DEP_CUSTOM_AMOUNT"}
         bot.send_message(
             chat_id,
-            f"Nháº­p sá» tiá»n báº¡n muá»n náº¡p (Tá»i thiá»u: <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>):",
+            f"Nh\u1eadp s\u1ed1 ti\u1ec1n b\u1ea1n mu\u1ed1n n\u1ea1p (T\u1ed1i thi\u1ec3u: <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>):",
         )
 
     elif data == "u_paid":
@@ -587,24 +587,24 @@ def on_callback(call: types.CallbackQuery):
         if dep_amt > 0:
             PENDING_STATE[uid] = {"action": "USER_LAST_DEP_AMT", "amount": dep_amt}
         approver_id = get_assigned_approver_id()
-        approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>Táº¥t cáº£ nhÃ¢n viÃªn</i>"
-        amt_line = f"â¢ Sá» tiá»n khÃ¡ch chá»n trÃªn QR: <b>{fmt_num(dep_amt)}</b>\n" if dep_amt > 0 else ""
+        approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>T\u1ea5t c\u1ea3 nh\xe2n vi\xean</i>"
+        amt_line = f"\u2022 S\u1ed1 ti\u1ec1n kh\xe1ch ch\u1ecdn tr\xean QR: <b>{fmt_num(dep_amt)}</b>\n" if dep_amt > 0 else ""
 
         bot.send_message(
             chat_id,
-            f"â ÄÃ£ gá»­i yÃªu cáº§u xÃ¡c nháº­n náº¡p tiá»n cho ID <code>{uid}</code>.\n"
-            f"<i>Náº¿u cÃ³ áº£nh bill, hÃ£y gá»­i áº£nh vÃ o chat nÃ y Äá» nhÃ¢n viÃªn Äá»i soÃ¡t nhanh.</i>",
+            f"\u2705 \u0110\xe3 g\u1eedi y\xeau c\u1ea7u x\xe1c nh\u1eadn n\u1ea1p ti\u1ec1n cho ID <code>{uid}</code>.\n"
+            f"<i>N\u1ebfu c\xf3 \u1ea3nh bill, h\xe3y g\u1eedi \u1ea3nh v\xe0o chat n\xe0y \u0111\u1ec3 nh\xe2n vi\xean \u0111\u1ed1i so\xe1t nhanh.</i>",
             reply_markup=kb_user_main(uid),
         )
         if BILL_GROUP_ID:
             bot.send_message(
                 BILL_GROUP_ID,
-                f"ð <b>YÃU Cáº¦U Náº P TIá»N Má»I</b>\n"
-                f"â¢ KhÃ¡ch: <b>{u['name']}</b> (@{u['username'] or 'khÃ´ng_cÃ³'})\n"
+                f"\U0001f514 <b>Y\xcaU C\u1ea6U N\u1ea0P TI\u1ec0N M\u1edaI</b>\n"
+                f"\u2022 Kh\xe1ch: <b>{u['name']}</b> (@{u['username'] or 'kh\xf4ng_c\xf3'})\n"
                 f"{amt_line}"
-                f"â¢ Ná»i dung CK / ID: <code>{uid}</code>\n"
-                f"â¢ NhÃ¢n viÃªn chá» Äá»nh duyá»t: {approver_txt}\n"
-                f"â¢ Thá»i gian: <code>{datetime.now().strftime('%H:%M - %d/%m/%Y')}</code>",
+                f"\u2022 N\u1ed9i dung CK / ID: <code>{uid}</code>\n"
+                f"\u2022 Nh\xe2n vi\xean ch\u1ec9 \u0111\u1ecbnh duy\u1ec7t: {approver_txt}\n"
+                f"\u2022 Th\u1eddi gian: <code>{datetime.now().strftime('%H:%M - %d/%m/%Y')}</code>",
                 reply_markup=kb_approve_deposit(uid),
             )
 
@@ -613,15 +613,15 @@ def on_callback(call: types.CallbackQuery):
         if bal < MIN_WITHDRAW_AMOUNT:
             bot.send_message(
                 chat_id,
-                f"â Sá» dÆ° vÃ­ hiá»n táº¡i lÃ  <b>{fmt_num(bal)}</b>, chÆ°a Äáº¡t má»©c rÃºt tá»i thiá»u <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+                f"\u274c S\u1ed1 d\u01b0 v\xed hi\u1ec7n t\u1ea1i l\xe0 <b>{fmt_num(bal)}</b>, ch\u01b0a \u0111\u1ea1t m\u1ee9c r\xfat t\u1ed1i thi\u1ec3u <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
                 reply_markup=kb_user_main(uid),
             )
         else:
             bot.send_message(
                 chat_id,
-                f"<b>RÃT TIá»N Vá» TÃI KHOáº¢N</b>\n"
-                f"â¢ RÃºt tá»i thiá»u: <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b> | Tá»i Äa: <b>{fmt_num(bal)}</b>\n\n"
-                f"Chá»n má»©c tiá»n rÃºt nhanh hoáº·c báº¥m <b>RÃºt háº¿t vÃ­</b>:",
+                f"<b>R\xdaT TI\u1ec0N V\u1ec0 T\xc0I KHO\u1ea2N</b>\n"
+                f"\u2022 R\xfat t\u1ed1i thi\u1ec3u: <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b> | T\u1ed1i \u0111a: <b>{fmt_num(bal)}</b>\n\n"
+                f"Ch\u1ecdn m\u1ee9c ti\u1ec1n r\xfat nhanh ho\u1eb7c b\u1ea5m <b>R\xfat h\u1ebft v\xed</b>:",
                 reply_markup=kb_withdraw_amounts(bal),
             )
 
@@ -630,16 +630,16 @@ def on_callback(call: types.CallbackQuery):
         if bal < MIN_WITHDRAW_AMOUNT:
             bot.send_message(
                 chat_id,
-                f"â Sá» dÆ° vÃ­ hiá»n táº¡i lÃ  <b>{fmt_num(bal)}</b>, chÆ°a Äáº¡t má»©c rÃºt tá»i thiá»u <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+                f"\u274c S\u1ed1 d\u01b0 v\xed hi\u1ec7n t\u1ea1i l\xe0 <b>{fmt_num(bal)}</b>, ch\u01b0a \u0111\u1ea1t m\u1ee9c r\xfat t\u1ed1i thi\u1ec3u <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
                 reply_markup=kb_user_main(uid),
             )
         else:
             PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": bal}
             bot.send_message(
                 chat_id,
-                f"<b>NHáº¬P THÃNG TIN NHáº¬N TIá»N RÃT Háº¾T VÃ ({fmt_num(bal)})</b>\n"
-                f"Gá»­i <b>áº£nh mÃ£ QR</b> tÃ i khoáº£n nháº­n HOáº¶C nháº¯n theo máº«u:\n"
-                f"<code>NgÃ¢n hÃ ng - Sá» tÃ i khoáº£n - TÃªn chá»§ TK</code>",
+                f"<b>NH\u1eacP TH\xd4NG TIN NH\u1eacN TI\u1ec0N R\xdaT H\u1ebeT V\xcd ({fmt_num(bal)})</b>\n"
+                f"G\u1eedi <b>\u1ea3nh m\xe3 QR</b> t\xe0i kho\u1ea3n nh\u1eadn HO\u1eb6C nh\u1eafn theo m\u1eabu:\n"
+                f"<code>Ng\xe2n h\xe0ng - S\u1ed1 t\xe0i kho\u1ea3n - T\xean ch\u1ee7 TK</code>",
             )
 
     elif data.startswith("u_wd_amt_"):
@@ -648,23 +648,23 @@ def on_callback(call: types.CallbackQuery):
         if amt < MIN_WITHDRAW_AMOUNT:
             bot.send_message(
                 chat_id,
-                f"â Sá» tiá»n rÃºt tá»i thiá»u lÃ  <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
+                f"\u274c S\u1ed1 ti\u1ec1n r\xfat t\u1ed1i thi\u1ec3u l\xe0 <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.",
                 reply_markup=kb_withdraw_amounts(bal),
             )
         elif amt > bal + 1e-6:
             bot.send_message(
                 chat_id,
-                f"â Sá» tiá»n rÃºt vÆ°á»£t sá» dÆ° vÃ­ (Tá»i Äa: <b>{fmt_num(bal)}</b>).",
+                f"\u274c S\u1ed1 ti\u1ec1n r\xfat v\u01b0\u1ee3t s\u1ed1 d\u01b0 v\xed (T\u1ed1i \u0111a: <b>{fmt_num(bal)}</b>).",
                 reply_markup=kb_withdraw_amounts(bal),
             )
         else:
             PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": amt}
             bot.send_message(
                 chat_id,
-                f"<b>NHáº¬P THÃNG TIN NHáº¬N TIá»N RÃT ({fmt_num(amt)})</b>\n"
-                f"Gá»­i <b>áº£nh mÃ£ QR</b> tÃ i khoáº£n nháº­n HOáº¶C nháº¯n theo máº«u:\n"
-                f"<code>NgÃ¢n hÃ ng - Sá» tÃ i khoáº£n - TÃªn chá»§ TK</code>\n"
-                f"<i>VÃ­ dá»¥: VCB - 0987654321 - TRAN VAN B</i>",
+                f"<b>NH\u1eacP TH\xd4NG TIN NH\u1eacN TI\u1ec0N R\xdaT ({fmt_num(amt)})</b>\n"
+                f"G\u1eedi <b>\u1ea3nh m\xe3 QR</b> t\xe0i kho\u1ea3n nh\u1eadn HO\u1eb6C nh\u1eafn theo m\u1eabu:\n"
+                f"<code>Ng\xe2n h\xe0ng - S\u1ed1 t\xe0i kho\u1ea3n - T\xean ch\u1ee7 TK</code>\n"
+                f"<i>V\xed d\u1ee5: VCB - 0987654321 - TRAN VAN B</i>",
             )
 
     elif data == "u_wd_custom":
@@ -672,15 +672,15 @@ def on_callback(call: types.CallbackQuery):
         PENDING_STATE[uid] = {"action": "USER_WD_AMOUNT"}
         bot.send_message(
             chat_id,
-            f"Nháº­p sá» tiá»n báº¡n muá»n rÃºt (Tá»i thiá»u: <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b> â Tá»i Äa: <b>{fmt_num(bal)}</b>):",
+            f"Nh\u1eadp s\u1ed1 ti\u1ec1n b\u1ea1n mu\u1ed1n r\xfat (T\u1ed1i thi\u1ec3u: <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b> \u2014 T\u1ed1i \u0111a: <b>{fmt_num(bal)}</b>):",
         )
 
     elif data.startswith("u_side_"):
         side = data.split("_")[2]
         if not open_dos:
-            bot.send_message(chat_id, "â ï¸ Hiá»n chÆ°a cÃ³ Äá» nÃ o Äang má».", reply_markup=kb_user_main(uid))
+            bot.send_message(chat_id, "\u26a0\ufe0f Hi\u1ec7n ch\u01b0a c\xf3 \u0111\u1ed9 n\xe0o \u0111ang m\u1edf.", reply_markup=kb_user_main(uid))
         elif len(open_dos) > 1:
-            side_label = "ð¢ XANH" if side == "XANH" else "ð´ Äá»"
+            side_label = "\U0001f7e2 XANH" if side == "XANH" else "\U0001f534 \u0110\u1ece"
             summary_lines = []
             for d in open_dos:
                 p_lbl = (
@@ -688,12 +688,12 @@ def on_callback(call: types.CallbackQuery):
                     if side == "XANH"
                     else f"{float(d['do_win']):g}/{float(d['do_lose']):g}"
                 )
-                summary_lines.append(f"â¢ <b>{d['name']}</b>: giÃ¡ {side_label} <code>{p_lbl}</code>")
+                summary_lines.append(f"\u2022 <b>{d['name']}</b>: gi\xe1 {side_label} <code>{p_lbl}</code>")
             bot.send_message(
                 chat_id,
-                f"Äang má» <b>{len(open_dos)} Äá»</b> cÃ¹ng lÃºc:\n"
+                f"\u0110ang m\u1edf <b>{len(open_dos)} \u0111\u1ed9</b> c\xf9ng l\xfac:\n"
                 + "\n".join(summary_lines)
-                + f"\n\nChá»n Äá» báº¡n muá»n ÄÃ¡nh cá»­a <b>{side_label}</b>:",
+                + f"\n\nCh\u1ecdn \u0111\u1ed9 b\u1ea1n mu\u1ed1n \u0111\xe1nh c\u1eeda <b>{side_label}</b>:",
                 reply_markup=kb_user_do_picker(side),
             )
         else:
@@ -711,35 +711,35 @@ def on_callback(call: types.CallbackQuery):
     elif data.startswith("u_custom_"):
         _, _, side, do_id_s = data.split("_")
         PENDING_STATE[uid] = {"action": "USER_BET_AMOUNT", "side": side, "do_id": int(do_id_s)}
-        bot.send_message(chat_id, f"Nháº­p sá» tiá»n báº¡n muá»n ÄÃ¡nh cá»­a <b>{side}</b>:")
+        bot.send_message(chat_id, f"Nh\u1eadp s\u1ed1 ti\u1ec1n b\u1ea1n mu\u1ed1n \u0111\xe1nh c\u1eeda <b>{side}</b>:")
 
-    # --- BÃO CÃO CHO MASTER & Cá» ÄÃNG TRONG NHÃM MASTER ---
+    # --- B\xc1O C\xc1O CHO MASTER & C\u1ed4 \u0110\xd4NG TRONG NH\xd3M MASTER ---
     elif data in ("a_rep_live", "a_rep_pnl", "a_rep_daily"):
         if not can_view_master_report(uid, chat_id) and not (chat_type == "private" and is_admin(uid)):
-            bot.answer_callback_query(call.id, "BÃ¡o cÃ¡o nÃ y chá» dÃ nh cho Master vÃ  nhÃ³m Master.", show_alert=True)
+            bot.answer_callback_query(call.id, "B\xe1o c\xe1o n\xe0y ch\u1ec9 d\xe0nh cho Master v\xe0 nh\xf3m Master.", show_alert=True)
             return
         rtype = "live" if data == "a_rep_live" else ("daily" if data == "a_rep_daily" else "pnl")
         send_report_to_master(rtype, uid, chat_id, chat_type)
 
     elif data == "a_day_reset":
         if not is_master(uid):
-            bot.answer_callback_query(call.id, "Chá» Master má»i ÄÆ°á»£c chá»t sá» cuá»i ngÃ y.", show_alert=True)
+            bot.answer_callback_query(call.id, "Ch\u1ec9 Master m\u1edbi \u0111\u01b0\u1ee3c ch\u1ed1t s\u1ed5 cu\u1ed1i ng\xe0y.", show_alert=True)
             return
         snapshot = close_day_accounting_logic()
         target_out = MASTER_GROUP_ID or chat_id
         bot.send_message(
             target_out,
-            f"ð <b>ÄÃ CHá»T Sá» CUá»I NGÃY</b>\n\n{snapshot}",
+            f"\U0001f319 <b>\u0110\xc3 CH\u1ed0T S\u1ed4 CU\u1ed0I NG\xc0Y</b>\n\n{snapshot}",
             reply_markup=get_panel_by_chat(target_out, "group" if target_out != uid else "private", uid),
         )
 
     # --- ADMIN / MASTER / STAFF ACTIONS ---
     elif data.startswith("a_") and not is_admin(uid):
-        bot.answer_callback_query(call.id, "Báº¡n khÃ´ng cÃ³ quyá»n thao tÃ¡c má»¥c nÃ y.", show_alert=True)
+        bot.answer_callback_query(call.id, "B\u1ea1n kh\xf4ng c\xf3 quy\u1ec1n thao t\xe1c m\u1ee5c n\xe0y.", show_alert=True)
         return
 
     elif data == "a_panel_open":
-        bot.send_message(chat_id, "<b>MENU ADMIN (CHAT RIÃNG)</b>", reply_markup=kb_full_admin_panel())
+        bot.send_message(chat_id, "<b>MENU ADMIN (CHAT RI\xcaNG)</b>", reply_markup=kb_full_admin_panel())
 
     elif data == "a_new_do":
         ok_time, time_msg = can_open_do_by_time()
@@ -749,9 +749,9 @@ def on_callback(call: types.CallbackQuery):
         PENDING_STATE[uid] = {"action": "ADMIN_OPEN_SPECIFIC_DO"}
         bot.send_message(
             chat_id,
-            "ð¯ <b>CHá»N HOáº¶C NHáº¬P Sá» Äá» MUá»N Má»</b>\n"
-            "â¢ Há» trá»£ má» ngáº«u nhiÃªn theo thá»±c táº¿ dá»i lá»ch (vÃ­ dá»¥ má» <b>Äá» 3</b> trÆ°á»c, <b>Äá» 2</b> sau, hoáº·c <b>Äá» 5</b>).\n"
-            "â¢ Má» Äá» nÃ o há» thá»ng sáº½ tá»± khÃ³a/hoÃ£n nháº­n kÃ¨o cÃ¡c Äá» khÃ¡c Äá» khÃ¡ch khÃ´ng ÄÃ¡nh nháº§m.",
+            "\U0001f3af <b>CH\u1eccN HO\u1eb6C NH\u1eacP S\u1ed0 \u0110\u1ed8 MU\u1ed0N M\u1ede</b>\n"
+            "\u2022 H\u1ed7 tr\u1ee3 m\u1edf ng\u1eabu nhi\xean theo th\u1ef1c t\u1ebf d\u1eddi l\u1ecbch (v\xed d\u1ee5 m\u1edf <b>\u0110\u1ed9 3</b> tr\u01b0\u1edbc, <b>\u0110\u1ed9 2</b> sau, ho\u1eb7c <b>\u0110\u1ed9 5</b>).\n"
+            "\u2022 M\u1edf \u0111\u1ed9 n\xe0o h\u1ec7 th\u1ed1ng s\u1ebd t\u1ef1 kh\xf3a/ho\xe3n nh\u1eadn k\xe8o c\xe1c \u0111\u1ed9 kh\xe1c \u0111\u1ec3 kh\xe1ch kh\xf4ng \u0111\xe1nh nh\u1ea7m.",
             reply_markup=kb_open_do_picker(),
         )
 
@@ -763,27 +763,27 @@ def on_callback(call: types.CallbackQuery):
 
     elif data == "a_open_custom":
         PENDING_STATE[uid] = {"action": "ADMIN_OPEN_SPECIFIC_DO"}
-        bot.send_message(chat_id, "âï¸ Nháº­p sá» Äá» báº¡n muá»n má» (vÃ­ dá»¥: <code>3</code>, <code>5</code>, <code>12</code>):")
+        bot.send_message(chat_id, "\u270d\ufe0f Nh\u1eadp s\u1ed1 \u0111\u1ed9 b\u1ea1n mu\u1ed1n m\u1edf (v\xed d\u1ee5: <code>3</code>, <code>5</code>, <code>12</code>):")
 
     elif data == "a_set_price":
         cur_open = db.get_open_dos()
         if not cur_open:
-            bot.send_message(chat_id, "â ï¸ Hiá»n khÃ´ng cÃ³ Äá» nÃ o Äang má» Äá» Äá»i giÃ¡.")
+            bot.send_message(chat_id, "\u26a0\ufe0f Hi\u1ec7n kh\xf4ng c\xf3 \u0111\u1ed9 n\xe0o \u0111ang m\u1edf \u0111\u1ec3 \u0111\u1ed5i gi\xe1.")
             return
         if len(cur_open) == 1:
             d0 = cur_open[0]
             bot.send_message(
                 chat_id,
-                f"<b>Äá»I GIÃ {d0['name']}</b>\n"
-                f"Hiá»n táº¡i: XANH <code>{float(d0['xanh_win']):g}/{float(d0['xanh_lose']):g}</code> | "
-                f"Äá» <code>{float(d0['do_win']):g}/{float(d0['do_lose']):g}</code>\n\n"
-                f"Chá»n 1 cá»­a Äá» nháº­p tá»· lá» (cá»­a cÃ²n láº¡i tá»± Äá»ng Äáº£o chiá»u):",
+                f"<b>\u0110\u1ed4I GI\xc1 {d0['name']}</b>\n"
+                f"Hi\u1ec7n t\u1ea1i: XANH <code>{float(d0['xanh_win']):g}/{float(d0['xanh_lose']):g}</code> | "
+                f"\u0110\u1ece <code>{float(d0['do_win']):g}/{float(d0['do_lose']):g}</code>\n\n"
+                f"Ch\u1ecdn 1 c\u1eeda \u0111\u1ec3 nh\u1eadp t\u1ef7 l\u1ec7 (c\u1eeda c\xf2n l\u1ea1i t\u1ef1 \u0111\u1ed9ng \u0111\u1ea3o chi\u1ec1u):",
                 reply_markup=kb_price_side_picker(str(d0["id"])),
             )
         else:
             bot.send_message(
                 chat_id,
-                "Chá»n Äá» cáº§n Äá»i giÃ¡ hoáº·c Äá»i chung táº¥t cáº£ Äá» Äang má»:",
+                "Ch\u1ecdn \u0111\u1ed9 c\u1ea7n \u0111\u1ed5i gi\xe1 ho\u1eb7c \u0111\u1ed5i chung t\u1ea5t c\u1ea3 \u0111\u1ed9 \u0111ang m\u1edf:",
                 reply_markup=kb_price_do_picker(),
             )
 
@@ -791,18 +791,18 @@ def on_callback(call: types.CallbackQuery):
         d_id = data.split("_")[3]
         d_obj = db.get_do_by_id(int(d_id))
         if not d_obj:
-            bot.send_message(chat_id, "KhÃ´ng tÃ¬m tháº¥y Äá».")
+            bot.send_message(chat_id, "Kh\xf4ng t\xecm th\u1ea5y \u0111\u1ed9.")
             return
         bot.send_message(
             chat_id,
-            f"<b>Äá»I GIÃ {d_obj['name']}</b> â Chá»n 1 cá»­a (cá»­a cÃ²n láº¡i tá»± Äáº£o):",
+            f"<b>\u0110\u1ed4I GI\xc1 {d_obj['name']}</b> \u2014 Ch\u1ecdn 1 c\u1eeda (c\u1eeda c\xf2n l\u1ea1i t\u1ef1 \u0111\u1ea3o):",
             reply_markup=kb_price_side_picker(d_id),
         )
 
     elif data == "a_pdo_all":
         bot.send_message(
             chat_id,
-            "<b>Äá»I GIÃ CHUNG Táº¤T Cáº¢ Äá» Má»</b> â Chá»n 1 cá»­a (cá»­a cÃ²n láº¡i tá»± Äáº£o):",
+            "<b>\u0110\u1ed4I GI\xc1 CHUNG T\u1ea4T C\u1ea2 \u0110\u1ed8 M\u1ede</b> \u2014 Ch\u1ecdn 1 c\u1eeda (c\u1eeda c\xf2n l\u1ea1i t\u1ef1 \u0111\u1ea3o):",
             reply_markup=kb_price_side_picker("ALL"),
         )
 
@@ -810,11 +810,11 @@ def on_callback(call: types.CallbackQuery):
         _, _, chosen_side, do_target = data.split("_")
         if do_target == "ALL":
             target_ids = [int(d["id"]) for d in db.get_open_dos()]
-            target_label = "Táº¥t cáº£ Äá» má»"
+            target_label = "T\u1ea5t c\u1ea3 \u0111\u1ed9 m\u1edf"
         else:
             d_obj = db.get_do_by_id(int(do_target))
             target_ids = [int(do_target)]
-            target_label = d_obj["name"] if d_obj else "Äá» hiá»n táº¡i"
+            target_label = d_obj["name"] if d_obj else "\u0110\u1ed9 hi\u1ec7n t\u1ea1i"
 
         PENDING_STATE[uid] = {
             "action": "ADMIN_SET_PRICE_ONE_SIDE",
@@ -822,12 +822,12 @@ def on_callback(call: types.CallbackQuery):
             "target_do_ids": target_ids,
             "target_label": target_label,
         }
-        side_name = "ð¢ XANH" if chosen_side == "XANH" else "ð´ Äá»"
-        opp_name = "ð´ Äá»" if chosen_side == "XANH" else "ð¢ XANH"
+        side_name = "\U0001f7e2 XANH" if chosen_side == "XANH" else "\U0001f534 \u0110\u1ece"
+        opp_name = "\U0001f534 \u0110\u1ece" if chosen_side == "XANH" else "\U0001f7e2 XANH"
         bot.send_message(
             chat_id,
-            f"Nháº­p tá»· lá» cho cá»­a <b>{side_name}</b> cá»§a <b>{target_label}</b>\n"
-            f"<i>VÃ­ dá»¥ nháº­p <code>5/10</code> -> {side_name} lÃ  <b>5/10</b>, {opp_name} tá»± Äáº£o thÃ nh <b>10/5</b>:</i>",
+            f"Nh\u1eadp t\u1ef7 l\u1ec7 cho c\u1eeda <b>{side_name}</b> c\u1ee7a <b>{target_label}</b>\n"
+            f"<i>V\xed d\u1ee5 nh\u1eadp <code>5/10</code> -> {side_name} l\xe0 <b>5/10</b>, {opp_name} t\u1ef1 \u0111\u1ea3o th\xe0nh <b>10/5</b>:</i>",
         )
 
     elif data == "a_multi_close_open":
@@ -836,8 +836,8 @@ def on_callback(call: types.CallbackQuery):
         PENDING_STATE[uid] = {"action": "ADMIN_MULTI_CLOSE", "selected_ids": default_sel}
         bot.send_message(
             chat_id,
-            "<b>CHá»T Äá» / CHá»T NHIá»U Äá» CÃNG LÃC</b>\n"
-            "Báº¥m chá»n 1 hoáº·c nhiá»u Äá», sau ÄÃ³ báº¥m nÃºt káº¿t quáº£ bÃªn dÆ°á»i:",
+            "<b>CH\u1ed0T \u0110\u1ed8 / CH\u1ed0T NHI\u1ec0U \u0110\u1ed8 C\xd9NG L\xdaC</b>\n"
+            "B\u1ea5m ch\u1ecdn 1 ho\u1eb7c nhi\u1ec1u \u0111\u1ed9, sau \u0111\xf3 b\u1ea5m n\xfat k\u1ebft qu\u1ea3 b\xean d\u01b0\u1edbi:",
             reply_markup=kb_multi_close_picker(default_sel),
         )
 
@@ -870,12 +870,12 @@ def on_callback(call: types.CallbackQuery):
             if len(cur_open) == 1:
                 sel_ids = [int(cur_open[0]["id"])]
         if not sel_ids:
-            bot.answer_callback_query(call.id, "Báº¡n chÆ°a chá»n Äá» nÃ o Äá» chá»t.", show_alert=True)
+            bot.answer_callback_query(call.id, "B\u1ea1n ch\u01b0a ch\u1ecdn \u0111\u1ed9 n\xe0o \u0111\u1ec3 ch\u1ed1t.", show_alert=True)
             return
 
         PENDING_STATE.pop(uid, None)
         summary = settle_multiple_dos_logic(sel_ids, result_code)
-        bot.answer_callback_query(call.id, f"ÄÃ£ chá»t {len(summary['do_names'])} Äá» ({result_code}).")
+        bot.answer_callback_query(call.id, f"\u0110\xe3 ch\u1ed1t {len(summary['do_names'])} \u0111\u1ed9 ({result_code}).")
 
         for d_name in summary["do_names"]:
             per_do_net = summary["per_do_net"].get(d_name, {})
@@ -891,36 +891,36 @@ def on_callback(call: types.CallbackQuery):
 
     elif data == "a_set_debt_limit":
         if not is_master(uid):
-            bot.answer_callback_query(call.id, "Chá» Master má»i ÄÆ°á»£c cáº¥p háº¡n má»©c ná»£.", show_alert=True)
+            bot.answer_callback_query(call.id, "Ch\u1ec9 Master m\u1edbi \u0111\u01b0\u1ee3c c\u1ea5p h\u1ea1n m\u1ee9c n\u1ee3.", show_alert=True)
             return
         PENDING_STATE[uid] = {"action": "ADMIN_SET_DEBT_LIMIT"}
         bot.send_message(
             chat_id,
-            "Nháº­p theo máº«u: <code>ID_KHACH HAN_MUC_NO</code>\n"
-            "<i>VÃ­ dá»¥: <code>5770334027 10000000</code></i>",
+            "Nh\u1eadp theo m\u1eabu: <code>ID_KHACH HAN_MUC_NO</code>\n"
+            "<i>V\xed d\u1ee5: <code>5770334027 10000000</code></i>",
         )
 
     elif data == "a_debt_menu":
         if not is_master(uid):
-            bot.answer_callback_query(call.id, "Chá» Master má»i ÄÆ°á»£c xá»­ lÃ½ ná»£.", show_alert=True)
+            bot.answer_callback_query(call.id, "Ch\u1ec9 Master m\u1edbi \u0111\u01b0\u1ee3c x\u1eed l\xfd n\u1ee3.", show_alert=True)
             return
         PENDING_STATE[uid] = {"action": "ADMIN_CLEAR_DEBT"}
         bot.send_message(
             chat_id,
-            "Nháº­p theo máº«u: <code>ID_KHACH SO_TIEN_THU_NO</code> (nháº­p <code>0</code> hoáº·c <code>ALL</code> Äá» xÃ³a háº¿t ná»£):\n"
-            "<i>VÃ­ dá»¥: <code>5770334027 2000000</code> hoáº·c <code>5770334027 ALL</code></i>",
+            "Nh\u1eadp theo m\u1eabu: <code>ID_KHACH SO_TIEN_THU_NO</code> (nh\u1eadp <code>0</code> ho\u1eb7c <code>ALL</code> \u0111\u1ec3 x\xf3a h\u1ebft n\u1ee3):\n"
+            "<i>V\xed d\u1ee5: <code>5770334027 2000000</code> ho\u1eb7c <code>5770334027 ALL</code></i>",
         )
 
     elif data == "a_assign_approver":
         if not is_master(uid):
-            bot.answer_callback_query(call.id, "Chá» Master má»i ÄÆ°á»£c chá» Äá»nh nhÃ¢n viÃªn duyá»t.", show_alert=True)
+            bot.answer_callback_query(call.id, "Ch\u1ec9 Master m\u1edbi \u0111\u01b0\u1ee3c ch\u1ec9 \u0111\u1ecbnh nh\xe2n vi\xean duy\u1ec7t.", show_alert=True)
             return
         PENDING_STATE[uid] = {"action": "ADMIN_ASSIGN_APPROVER"}
         cur_app = get_assigned_approver_id()
         bot.send_message(
             chat_id,
-            f"NhÃ¢n viÃªn duyá»t hiá»n táº¡i: <code>{cur_app or 'ChÆ°a chá» Äá»nh (má»i admin duyá»t)'}</code>\n"
-            f"Nháº­p <b>User ID</b> nhÃ¢n viÃªn cáº§n chá» Äá»nh (hoáº·c nháº­p <code>0</code> Äá» má» cho táº¥t cáº£ admin):",
+            f"Nh\xe2n vi\xean duy\u1ec7t hi\u1ec7n t\u1ea1i: <code>{cur_app or 'Ch\u01b0a ch\u1ec9 \u0111\u1ecbnh (m\u1ecdi admin duy\u1ec7t)'}</code>\n"
+            f"Nh\u1eadp <b>User ID</b> nh\xe2n vi\xean c\u1ea7n ch\u1ec9 \u0111\u1ecbnh (ho\u1eb7c nh\u1eadp <code>0</code> \u0111\u1ec3 m\u1edf cho t\u1ea5t c\u1ea3 admin):",
         )
 
     elif data.startswith("a_dep_ok_"):
@@ -933,7 +933,7 @@ def on_callback(call: types.CallbackQuery):
         suggested = float(st["amount"]) if (st and st.get("amount")) else 0.0
         bot.send_message(
             chat_id,
-            f"Chá»n sá» tiá»n cá»ng vÃ o vÃ­ khÃ¡ch ID <code>{target_uid}</code>:",
+            f"Ch\u1ecdn s\u1ed1 ti\u1ec1n c\u1ed9ng v\xe0o v\xed kh\xe1ch ID <code>{target_uid}</code>:",
             reply_markup=kb_deposit_presets(target_uid, suggested),
         )
 
@@ -944,9 +944,9 @@ def on_callback(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, err, show_alert=True)
             return
         PENDING_STATE.pop(target_uid, None)
-        bot.send_message(chat_id, f"â ÄÃ£ tá»« chá»i yÃªu cáº§u náº¡p cá»§a ID <code>{target_uid}</code>.")
+        bot.send_message(chat_id, f"\u274c \u0110\xe3 t\u1eeb ch\u1ed1i y\xeau c\u1ea7u n\u1ea1p c\u1ee7a ID <code>{target_uid}</code>.")
         try:
-            bot.send_message(target_uid, "â YÃªu cáº§u náº¡p tiá»n cá»§a báº¡n chÆ°a ÄÆ°á»£c duyá»t. Vui lÃ²ng liÃªn há» há» trá»£.")
+            bot.send_message(target_uid, "\u274c Y\xeau c\u1ea7u n\u1ea1p ti\u1ec1n c\u1ee7a b\u1ea1n ch\u01b0a \u0111\u01b0\u1ee3c duy\u1ec7t. Vui l\xf2ng li\xean h\u1ec7 h\u1ed7 tr\u1ee3.")
         except Exception:
             pass
 
@@ -963,14 +963,14 @@ def on_callback(call: types.CallbackQuery):
         u_after = res["user"]
         bot.send_message(
             chat_id,
-            f"â ÄÃ£ cá»ng <b>{fmt_num(amt)}</b> cho <b>{u_after['name']}</b> (<code>{target_uid}</code>).\n"
-            f"â¢ VÃ­ má»i: <b>{fmt_num(float(u_after['balance']))}</b>",
+            f"\u2705 \u0110\xe3 c\u1ed9ng <b>{fmt_num(amt)}</b> cho <b>{u_after['name']}</b> (<code>{target_uid}</code>).\n"
+            f"\u2022 V\xed m\u1edbi: <b>{fmt_num(float(u_after['balance']))}</b>",
         )
         try:
             bot.send_message(
                 target_uid,
-                f"â Náº¡p thÃ nh cÃ´ng <b>{fmt_num(amt)}</b> vÃ o vÃ­!\n"
-                f"â¢ Sá» dÆ° hiá»n táº¡i: <b>{fmt_num(float(u_after['balance']))}</b>",
+                f"\u2705 N\u1ea1p th\xe0nh c\xf4ng <b>{fmt_num(amt)}</b> v\xe0o v\xed!\n"
+                f"\u2022 S\u1ed1 d\u01b0 hi\u1ec7n t\u1ea1i: <b>{fmt_num(float(u_after['balance']))}</b>",
                 reply_markup=kb_user_main(target_uid),
             )
         except Exception:
@@ -983,7 +983,7 @@ def on_callback(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, err, show_alert=True)
             return
         PENDING_STATE[uid] = {"action": "ADMIN_DEP_CUSTOM_AMT", "target_uid": target_uid}
-        bot.send_message(chat_id, f"Nháº­p sá» tiá»n muá»n cá»ng cho khÃ¡ch ID <code>{target_uid}</code>:")
+        bot.send_message(chat_id, f"Nh\u1eadp s\u1ed1 ti\u1ec1n mu\u1ed1n c\u1ed9ng cho kh\xe1ch ID <code>{target_uid}</code>:")
 
     elif data.startswith("a_wd_ok_"):
         w_id = int(data.split("_")[3])
@@ -1000,7 +1000,7 @@ def on_callback(call: types.CallbackQuery):
             try:
                 bot.send_message(
                     int(u_wd["user_id"]),
-                    f"â Lá»nh rÃºt <code>#R{w_id:03d}</code> (<b>{fmt_num(float(w_rec['amount']))}</b>) ÄÃ£ ÄÆ°á»£c chuyá»n tiá»n!",
+                    f"\u2705 L\u1ec7nh r\xfat <code>#R{w_id:03d}</code> (<b>{fmt_num(float(w_rec['amount']))}</b>) \u0111\xe3 \u0111\u01b0\u1ee3c chuy\u1ec3n ti\u1ec1n!",
                     reply_markup=kb_user_main(int(u_wd["user_id"])),
                 )
             except Exception:
@@ -1020,7 +1020,7 @@ def on_callback(call: types.CallbackQuery):
             try:
                 bot.send_message(
                     int(w_rec["user_id"]),
-                    f"â Lá»nh rÃºt <code>#R{w_id:03d}</code> bá» tá»« chá»i vÃ  ÄÃ£ hoÃ n láº¡i <b>{fmt_num(float(w_rec['amount']))}</b> vÃ o vÃ­.",
+                    f"\u274c L\u1ec7nh r\xfat <code>#R{w_id:03d}</code> b\u1ecb t\u1eeb ch\u1ed1i v\xe0 \u0111\xe3 ho\xe0n l\u1ea1i <b>{fmt_num(float(w_rec['amount']))}</b> v\xe0o v\xed.",
                     reply_markup=kb_user_main(int(w_rec["user_id"])),
                 )
             except Exception:
@@ -1032,7 +1032,7 @@ def on_callback(call: types.CallbackQuery):
         pass
 
 
-# ==================== Xá»¬ LÃ TIN NHáº®N & áº¢NH THEO TRáº NG THÃI ====================
+# ==================== X\u1eec L\xdd TIN NH\u1eaeN & \u1ea2NH THEO TR\u1ea0NG TH\xc1I ====================
 @bot.message_handler(content_types=["photo"])
 def on_photo(message: types.Message):
     uid = message.from_user.id
@@ -1053,12 +1053,12 @@ def on_photo(message: types.Message):
     if BILL_GROUP_ID:
         u = db.get_user(uid, message.from_user.first_name, message.from_user.username)
         approver_id = get_assigned_approver_id()
-        approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>Táº¥t cáº£ nhÃ¢n viÃªn</i>"
+        approver_txt = f"<code>{approver_id}</code>" if approver_id > 0 else "<i>T\u1ea5t c\u1ea3 nh\xe2n vi\xean</i>"
         cap = (
-            f"ð§¾ <b>BILL Náº P TIá»N Tá»ª KHÃCH</b>\n"
-            f"â¢ KhÃ¡ch: <b>{u['name']}</b> (@{u['username'] or 'khÃ´ng_cÃ³'}) | ID: <code>{uid}</code>\n"
-            f"â¢ NhÃ¢n viÃªn chá» Äá»nh duyá»t: {approver_txt}\n"
-            f"â¢ Thá»i gian: <code>{datetime.now().strftime('%H:%M - %d/%m/%Y')}</code>"
+            f"\U0001f9fe <b>BILL N\u1ea0P TI\u1ec0N T\u1eea KH\xc1CH</b>\n"
+            f"\u2022 Kh\xe1ch: <b>{u['name']}</b> (@{u['username'] or 'kh\xf4ng_c\xf3'}) | ID: <code>{uid}</code>\n"
+            f"\u2022 Nh\xe2n vi\xean ch\u1ec9 \u0111\u1ecbnh duy\u1ec7t: {approver_txt}\n"
+            f"\u2022 Th\u1eddi gian: <code>{datetime.now().strftime('%H:%M - %d/%m/%Y')}</code>"
         )
         bot.send_photo(BILL_GROUP_ID, photo_id, caption=cap, reply_markup=kb_approve_deposit(uid))
 
@@ -1090,7 +1090,7 @@ def on_text(message: types.Message):
         try:
             ratio_map = parse_single_side_ratio(f"{chosen_side} {raw}", chosen_side)
         except Exception:
-            bot.send_message(chat_id, "â Tá»· lá» khÃ´ng há»£p lá». VÃ­ dá»¥ nháº­p: <code>5/10</code> hoáº·c <code>10/8</code>.")
+            bot.send_message(chat_id, "\u274c T\u1ef7 l\u1ec7 kh\xf4ng h\u1ee3p l\u1ec7. V\xed d\u1ee5 nh\u1eadp: <code>5/10</code> ho\u1eb7c <code>10/8</code>.")
             return
 
         PENDING_STATE.pop(uid, None)
@@ -1098,9 +1098,9 @@ def on_text(message: types.Message):
             db.update_do(d_id, **ratio_map)
         bot.send_message(
             chat_id,
-            f"â ÄÃ£ cáº­p nháº­t giÃ¡ cho <b>{target_label}</b>:\n"
-            f"â¢ XANH: <code>{ratio_map['xanh_win']:g}/{ratio_map['xanh_lose']:g}</code>\n"
-            f"â¢ Äá»: <code>{ratio_map['do_win']:g}/{ratio_map['do_lose']:g}</code>",
+            f"\u2705 \u0110\xe3 c\u1eadp nh\u1eadt gi\xe1 cho <b>{target_label}</b>:\n"
+            f"\u2022 XANH: <code>{ratio_map['xanh_win']:g}/{ratio_map['xanh_lose']:g}</code>\n"
+            f"\u2022 \u0110\u1ece: <code>{ratio_map['do_win']:g}/{ratio_map['do_lose']:g}</code>",
             reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
         return
@@ -1108,13 +1108,13 @@ def on_text(message: types.Message):
     if act == "ADMIN_SET_DEBT_LIMIT" and is_master(uid):
         parts = raw.split()
         if len(parts) != 2 or not parts[0].isdigit():
-            bot.send_message(chat_id, "â Sai cÃº phÃ¡p. Nháº­p: <code>ID_KHACH HAN_MUC_NO</code>")
+            bot.send_message(chat_id, "\u274c Sai c\xfa ph\xe1p. Nh\u1eadp: <code>ID_KHACH HAN_MUC_NO</code>")
             return
         t_uid = int(parts[0])
         try:
             d_lim = float(parts[1].replace(".", "").replace(",", ""))
         except ValueError:
-            bot.send_message(chat_id, "â Háº¡n má»©c ná»£ khÃ´ng há»£p lá».")
+            bot.send_message(chat_id, "\u274c H\u1ea1n m\u1ee9c n\u1ee3 kh\xf4ng h\u1ee3p l\u1ec7.")
             return
         PENDING_STATE.pop(uid, None)
         db.get_user(t_uid)
@@ -1122,7 +1122,7 @@ def on_text(message: types.Message):
         u_after = db.get_user(t_uid)
         bot.send_message(
             chat_id,
-            f"â ÄÃ£ cáº­p nháº­t háº¡n má»©c ná»£ cho ID <code>{t_uid}</code>: <b>{fmt_num(float(u_after['debt_limit']))}</b>",
+            f"\u2705 \u0110\xe3 c\u1eadp nh\u1eadt h\u1ea1n m\u1ee9c n\u1ee3 cho ID <code>{t_uid}</code>: <b>{fmt_num(float(u_after['debt_limit']))}</b>",
             reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
         return
@@ -1130,7 +1130,7 @@ def on_text(message: types.Message):
     if act == "ADMIN_CLEAR_DEBT" and is_master(uid):
         parts = raw.split()
         if len(parts) != 2 or not parts[0].isdigit():
-            bot.send_message(chat_id, "â Sai cÃº phÃ¡p. Nháº­p: <code>ID_KHACH SO_TIEN_HOAC_ALL</code>")
+            bot.send_message(chat_id, "\u274c Sai c\xfa ph\xe1p. Nh\u1eadp: <code>ID_KHACH SO_TIEN_HOAC_ALL</code>")
             return
         t_uid = int(parts[0])
         u_cur = db.get_user(t_uid)
@@ -1143,25 +1143,25 @@ def on_text(message: types.Message):
             try:
                 paid = float(parts[1].replace(".", "").replace(",", ""))
             except ValueError:
-                bot.send_message(chat_id, "â Sá» tiá»n khÃ´ng há»£p lá».")
+                bot.send_message(chat_id, "\u274c S\u1ed1 ti\u1ec1n kh\xf4ng h\u1ee3p l\u1ec7.")
                 return
             new_debt = max(0.0, cur_debt - paid)
         db.update_user_fields(t_uid, debt=new_debt)
         bot.send_message(
             chat_id,
-            f"â ÄÃ£ thu/xÃ³a <b>{fmt_num(paid)}</b> ná»£ cho ID <code>{t_uid}</code>. Ná»£ cÃ²n láº¡i: <b>{fmt_num(new_debt)}</b>",
+            f"\u2705 \u0110\xe3 thu/x\xf3a <b>{fmt_num(paid)}</b> n\u1ee3 cho ID <code>{t_uid}</code>. N\u1ee3 c\xf2n l\u1ea1i: <b>{fmt_num(new_debt)}</b>",
             reply_markup=get_panel_by_chat(chat_id, chat_type, uid),
         )
         return
 
     if act == "ADMIN_ASSIGN_APPROVER" and is_master(uid):
         if not raw.isdigit():
-            bot.send_message(chat_id, "â Vui lÃ²ng nháº­p User ID dáº¡ng sá» (hoáº·c <code>0</code>).")
+            bot.send_message(chat_id, "\u274c Vui l\xf2ng nh\u1eadp User ID d\u1ea1ng s\u1ed1 (ho\u1eb7c <code>0</code>).")
             return
         staff_id = int(raw)
         PENDING_STATE.pop(uid, None)
         set_assigned_approver_id(staff_id)
-        txt = f"â ÄÃ£ chá» Äá»nh nhÃ¢n viÃªn duyá»t ID <code>{staff_id}</code>." if staff_id > 0 else "â ÄÃ£ má» quyá»n duyá»t cho táº¥t cáº£ admin."
+        txt = f"\u2705 \u0110\xe3 ch\u1ec9 \u0111\u1ecbnh nh\xe2n vi\xean duy\u1ec7t ID <code>{staff_id}</code>." if staff_id > 0 else "\u2705 \u0110\xe3 m\u1edf quy\u1ec1n duy\u1ec7t cho t\u1ea5t c\u1ea3 admin."
         bot.send_message(chat_id, txt, reply_markup=get_panel_by_chat(chat_id, chat_type, uid))
         return
 
@@ -1172,19 +1172,19 @@ def on_text(message: types.Message):
             if amt <= 0:
                 raise ValueError()
         except ValueError:
-            bot.send_message(chat_id, "â Sá» tiá»n khÃ´ng há»£p lá».")
+            bot.send_message(chat_id, "\u274c S\u1ed1 ti\u1ec1n kh\xf4ng h\u1ee3p l\u1ec7.")
             return
         PENDING_STATE.pop(uid, None)
         res = apply_deposit_logic(t_uid, amt)
         u_after = res["user"]
         bot.send_message(
             chat_id,
-            f"â ÄÃ£ cá»ng <b>{fmt_num(amt)}</b> cho ID <code>{t_uid}</code>. VÃ­ má»i: <b>{fmt_num(float(u_after['balance']))}</b>",
+            f"\u2705 \u0110\xe3 c\u1ed9ng <b>{fmt_num(amt)}</b> cho ID <code>{t_uid}</code>. V\xed m\u1edbi: <b>{fmt_num(float(u_after['balance']))}</b>",
         )
         try:
             bot.send_message(
                 t_uid,
-                f"â Náº¡p thÃ nh cÃ´ng <b>{fmt_num(amt)}</b> vÃ o vÃ­!\nâ¢ Sá» dÆ° hiá»n táº¡i: <b>{fmt_num(float(u_after['balance']))}</b>",
+                f"\u2705 N\u1ea1p th\xe0nh c\xf4ng <b>{fmt_num(amt)}</b> v\xe0o v\xed!\n\u2022 S\u1ed1 d\u01b0 hi\u1ec7n t\u1ea1i: <b>{fmt_num(float(u_after['balance']))}</b>",
                 reply_markup=kb_user_main(t_uid),
             )
         except Exception:
@@ -1196,10 +1196,10 @@ def on_text(message: types.Message):
         try:
             amt = float(raw.replace(".", "").replace(",", ""))
         except ValueError:
-            bot.send_message(chat_id, "â Vui lÃ²ng nháº­p sá» tiá»n há»£p lá».")
+            bot.send_message(chat_id, "\u274c Vui l\xf2ng nh\u1eadp s\u1ed1 ti\u1ec1n h\u1ee3p l\u1ec7.")
             return
         if amt < MIN_DEPOSIT_AMOUNT:
-            bot.send_message(chat_id, f"â Sá» tiá»n náº¡p tá»i thiá»u lÃ  <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.")
+            bot.send_message(chat_id, f"\u274c S\u1ed1 ti\u1ec1n n\u1ea1p t\u1ed1i thi\u1ec3u l\xe0 <b>{fmt_num(MIN_DEPOSIT_AMOUNT)}</b>.")
             return
         PENDING_STATE.pop(uid, None)
         send_deposit_qr(chat_id, uid, amt)
@@ -1209,22 +1209,22 @@ def on_text(message: types.Message):
         try:
             amt = float(raw.replace(".", "").replace(",", ""))
         except ValueError:
-            bot.send_message(chat_id, "â Vui lÃ²ng nháº­p sá» tiá»n há»£p lá».")
+            bot.send_message(chat_id, "\u274c Vui l\xf2ng nh\u1eadp s\u1ed1 ti\u1ec1n h\u1ee3p l\u1ec7.")
             return
         u_cur = db.get_user(uid)
         bal = float(u_cur["balance"])
         if amt < MIN_WITHDRAW_AMOUNT:
-            bot.send_message(chat_id, f"â Sá» tiá»n rÃºt tá»i thiá»u lÃ  <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.")
+            bot.send_message(chat_id, f"\u274c S\u1ed1 ti\u1ec1n r\xfat t\u1ed1i thi\u1ec3u l\xe0 <b>{fmt_num(MIN_WITHDRAW_AMOUNT)}</b>.")
             return
         if amt > bal + 1e-6:
-            bot.send_message(chat_id, f"â Sá» tiá»n rÃºt vÆ°á»£t sá» dÆ° vÃ­ (Tá»i Äa: <b>{fmt_num(bal)}</b>).")
+            bot.send_message(chat_id, f"\u274c S\u1ed1 ti\u1ec1n r\xfat v\u01b0\u1ee3t s\u1ed1 d\u01b0 v\xed (T\u1ed1i \u0111a: <b>{fmt_num(bal)}</b>).")
             return
         PENDING_STATE[uid] = {"action": "USER_WD_INFO", "amount": amt}
         bot.send_message(
             chat_id,
-            f"<b>NHáº¬P THÃNG TIN NHáº¬N TIá»N RÃT ({fmt_num(amt)})</b>\n"
-            f"Gá»­i <b>áº£nh mÃ£ QR</b> tÃ i khoáº£n nháº­n HOáº¶C nháº¯n theo máº«u:\n"
-            f"<code>NgÃ¢n hÃ ng - Sá» tÃ i khoáº£n - TÃªn chá»§ TK</code>",
+            f"<b>NH\u1eacP TH\xd4NG TIN NH\u1eacN TI\u1ec0N R\xdaT ({fmt_num(amt)})</b>\n"
+            f"G\u1eedi <b>\u1ea3nh m\xe3 QR</b> t\xe0i kho\u1ea3n nh\u1eadn HO\u1eb6C nh\u1eafn theo m\u1eabu:\n"
+            f"<code>Ng\xe2n h\xe0ng - S\u1ed1 t\xe0i kho\u1ea3n - T\xean ch\u1ee7 TK</code>",
         )
         return
 
@@ -1242,7 +1242,7 @@ def on_text(message: types.Message):
         try:
             amt = float(raw.replace(".", "").replace(",", ""))
         except ValueError:
-            bot.send_message(chat_id, "â Vui lÃ²ng nháº­p sá» tiá»n há»£p lá».")
+            bot.send_message(chat_id, "\u274c Vui l\xf2ng nh\u1eadp s\u1ed1 ti\u1ec1n h\u1ee3p l\u1ec7.")
             return
         side = st["side"]
         do_id = int(st["do_id"])
