@@ -171,31 +171,28 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
     return max(0.0, bonus)
 
 
-def _calc_do_min_positive_edge(user_id: int, do_name: str) -> float:
+def build_multi_do_rule_notice(do_name: str | None = None) -> str:
     """
-    Tính đầu bên lời ròng ít hơn (sau 5% phế) của một độ khi xét cả 2 kịch bản XANH / ĐỎ,
-    có tính đến các mã đánh lộn xộn 2 chiều trên độ đó.
+    Thông báo quy tắc chơi song song nhiều độ, giới hạn theo tiền gốc còn dư,
+    cộng dồn sau chốt độ và rút tiền linh hoạt.
     """
-    bets = db.get_active_bets(do_name=do_name, user_id=user_id)
-    if not bets:
-        return 0.0
-
-    xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
-    xanh_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH")
-    do_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "DO")
-    do_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "DO")
-
-    pnl_if_xanh = xanh_win_net - do_lose
-    pnl_if_do = do_win_net - xanh_lose
-
-    return max(0.0, min(pnl_if_xanh, pnl_if_do))
+    title = f"<b>📌 THÔNG BÁO QUY TẮC CƯỢC — {do_name.upper()}</b>" if do_name else "<b>📌 THÔNG BÁO QUY TẮC CƯỢC</b>"
+    return (
+        f"{title}\n"
+        f"• Hệ thống cho phép <b>đánh song song nhiều độ cùng lúc</b> khi các độ chưa chốt.\n"
+        f"• Độ tiếp theo khách muốn đánh sẽ chỉ đánh được trong phạm vi <b>tiền gốc còn dư</b> của tài khoản.\n"
+        f"• Nếu muốn đánh vượt mốc hiện tại, khách <b>bắt buộc phải nạp thêm tiền</b>.\n"
+        f"• Tiền ăn thua khi chốt độ sẽ được <b>tính cộng dồn</b> (đã trừ 5% phế trên phần lời) để chơi tiếp các độ sau.\n"
+        f"• Khách có thể tạo lệnh <b>rút tiền</b> bất kỳ lúc nào (trong phạm vi số dư khả dụng)."
+    )
 
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    - Ở độ đầu tiên của chuỗi: hạn mức tối đa từng cửa = vốn gốc còn dư + lời ròng cửa đối diện - gốc cùng cửa.
-    - Khi mở độ tiếp theo (bất kỳ): hạn mức bị khống chế <= đầu bên lời ít hơn của chuỗi độ trước
-      (xét cả XANH/ĐỎ lộn xộn) và tiếp tục nối tiếp cho các độ sau.
+    Hạn mức tối đa từng cửa khi hỗ trợ đánh song song nhiều độ:
+    - Tiền gốc còn dư = max_capacity - rủi ro xấu nhất đang khóa ở các độ chưa chốt khác.
+    - Trần tổng cửa = tiền gốc còn dư + lời ròng cửa đối diện (sau 5% phế).
+    - Hạn mức còn lại mã này = trần tổng cửa - gốc đã đặt cùng cửa.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_unsettled_dos()]
@@ -229,23 +226,8 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
 
     remaining_capital = max(0.0, max_capacity - other_risk)
 
-    prior_dos = [
-        d for d in open_dos
-        if do and int(d["id"]) < int(do["id"])
-    ]
-    prior_dos.sort(key=lambda item: int(item["id"]))
-
-    has_prior_chain = len(prior_dos) > 0
-    if has_prior_chain:
-        edges = [_calc_do_min_positive_edge(user_id, str(d["name"])) for d in prior_dos]
-        chain_cap = min(edges) if edges else 0.0
-        effective_capital = min(remaining_capital, chain_cap)
-    else:
-        chain_cap = remaining_capital
-        effective_capital = remaining_capital
-
-    xanh_total_cap = max(0.0, effective_capital + do_win_net_sum)
-    do_total_cap = max(0.0, effective_capital + xanh_win_net_sum)
+    xanh_total_cap = max(0.0, remaining_capital + do_win_net_sum)
+    do_total_cap = max(0.0, remaining_capital + xanh_win_net_sum)
 
     max_xanh = max(0.0, xanh_total_cap - xanh_lose_sum)
     max_do = max(0.0, do_total_cap - do_lose_sum)
@@ -258,11 +240,9 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "max_capacity": max_capacity,
         "total_open_principal": sum(float(b["amount"]) for b in all_open_bets),
         "locked_capital": other_risk + cur_do_locked_capital,
-        "base_unused": effective_capital,
+        "base_unused": remaining_capital,
         "edge_bonus": 0.0,
-        "unused_capital": effective_capital,
-        "chain_cap": chain_cap,
-        "has_prior_chain": has_prior_chain,
+        "unused_capital": remaining_capital,
         "xanh_opp_win": do_win_net_sum,
         "do_opp_win": xanh_win_net_sum,
         "max_xanh": max_xanh,
@@ -360,7 +340,7 @@ def open_specific_do_logic(
     xanh_lose: float = 10.0,
     do_win: float = 10.0,
     do_lose: float = 10.0,
-    exclusive_active: bool = True,
+    exclusive_active: bool = False,
 ) -> tuple[bool, str, dict | None]:
     ok_time, time_msg = can_open_do_by_time()
     if not ok_time:
@@ -387,10 +367,12 @@ def open_specific_do_logic(
     if not do_rec:
         return False, f"\u274c Không thể mở <b>{do_name}</b>. Độ đã chốt không thể mở lại; hãy dùng tên độ mới.", None
 
+    open_now = [str(d["name"]) for d in db.get_open_dos() if d.get("status") == "OPEN"]
     msg = (
         f"\u2705 <b>ĐÃ MỞ {do_name.upper()}</b> "
         f"(XANH <code>{xanh_win:g}/{xanh_lose:g}</code> | ĐỎ <code>{do_win:g}/{do_lose:g}</code>).\n"
-        f"\u2022 Hiện chỉ nhận cược cho <b>{do_name}</b> để tránh đánh nhầm độ."
+        f"\u2022 Có thể đánh song song các độ đang mở: <b>{', '.join(open_now)}</b>.\n"
+        f"\u2022 Độ mới chỉ đánh được trong phạm vi tiền gốc còn dư; muốn vượt mốc cần nạp thêm tiền."
     )
     if held_names:
         msg += f"\n\u2022 Đã chuyển sang trạng thái chờ/hoãn: <b>{', '.join(held_names)}</b>."
@@ -432,16 +414,13 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 
     allowed_budget = lim["max_xanh"] if side_norm == "XANH" else lim["max_do"]
     if amount > allowed_budget + 1e-6:
-        extra_note = ""
-        if lim.get("has_prior_chain"):
-            extra_note = f"\n\u2022 Trần nối tiếp từ độ trước (đầu lời ít hơn): <b>{fmt_num(lim['chain_cap'])}</b>"
         return (
             False,
             f"\u274c Vượt hạn mức tổng cược cửa {side_norm} ({do['name']})!\n"
+            f"\u2022 Tiền gốc còn dư khả dụng: <b>{fmt_num(unused_capital)}</b>\n"
             f"\u2022 Lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
-            f"\u2022 Hạn mức khả dụng của độ này: <b>{fmt_num(unused_capital)}</b> | Tối đa mã này: <b>{fmt_num(allowed_budget)}</b>"
-            f"{extra_note}\n"
-            f"\u2022 Đã trừ tất cả mã đã cược trước đó ở cùng cửa.",
+            f"\u2022 Tối đa có thể đặt mã này: <b>{fmt_num(allowed_budget)}</b>\n"
+            f"\u2022 Muốn đánh vượt mốc, vui lòng nạp thêm tiền vào tài khoản.",
         )
 
     other_dos_worst_loss = sum(
