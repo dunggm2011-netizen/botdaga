@@ -187,9 +187,10 @@ def build_parallel_do_notice(do_name: str | None = None) -> str:
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Tính hạn mức cho từng cửa trên độ đang chọn khi cho phép đánh song song nhiều độ:
-    - Bảo toàn phế 5% trên mọi đầu lời ròng.
-    - Cộng đủ phần vốn gốc còn dư của tài khoản vào hạn mức mã tiếp theo.
+    Tính hạn mức còn đặt được của cửa XANH và ĐỎ:
+    - Trừ đủ gốc đã đặt cùng cửa, cộng phần lời ròng cửa đối diện (sau 5% phế)
+      và tiền gốc khả dụng còn dư.
+    - Siết chặt thêm theo tổng rủi ro xấu nhất để không đánh vượt trần khả năng thanh toán.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_unsettled_dos()]
@@ -221,14 +222,15 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         if not do or d["id"] != do["id"]
     )
 
-    locked_capital = other_risk + cur_do_locked_capital
-    remaining_capital = max(0.0, max_capacity - locked_capital)
+    # Tiền gốc còn dư của tài khoản sau khi trừ rủi ro xấu nhất đang khóa
+    remaining_capital = max(0.0, max_capacity - other_risk - cur_do_locked_capital)
 
-    xanh_total_cap = max(0.0, xanh_lose_sum + remaining_capital + do_win_net_sum)
-    do_total_cap = max(0.0, do_lose_sum + remaining_capital + xanh_win_net_sum)
+    # Hạn mức còn lại cho mã tiếp theo của mỗi cửa = tiền gốc còn dư + lời ròng cửa đối diện
+    max_xanh = max(0.0, remaining_capital + do_win_net_sum)
+    max_do = max(0.0, remaining_capital + xanh_win_net_sum)
 
-    max_xanh = max(0.0, xanh_total_cap - xanh_lose_sum)
-    max_do = max(0.0, do_total_cap - do_lose_sum)
+    xanh_total_cap = xanh_lose_sum + max_xanh
+    do_total_cap = do_lose_sum + max_do
 
     return {
         "user": u,
@@ -237,7 +239,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "all_open_bets": all_open_bets,
         "max_capacity": max_capacity,
         "total_open_principal": sum(float(b["amount"]) for b in all_open_bets),
-        "locked_capital": locked_capital,
+        "locked_capital": other_risk + cur_do_locked_capital,
         "base_unused": remaining_capital,
         "edge_bonus": 0.0,
         "unused_capital": remaining_capital,
