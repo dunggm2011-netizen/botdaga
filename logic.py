@@ -171,28 +171,25 @@ def _calc_other_dos_edge_bonus(user_id: int, current_do_name: str, open_dos: lis
     return max(0.0, bonus)
 
 
-def build_multi_do_rule_notice(do_name: str | None = None) -> str:
+def build_parallel_do_notice(do_name: str | None = None) -> str:
     """
-    Thông báo quy tắc chơi song song nhiều độ, giới hạn theo tiền gốc còn dư,
-    cộng dồn sau chốt độ và rút tiền linh hoạt.
+    Thông báo tự động cho khách khi chơi song song nhiều độ để tránh nhầm lẫn.
     """
-    title = f"<b>📌 THÔNG BÁO QUY TẮC CƯỢC — {do_name.upper()}</b>" if do_name else "<b>📌 THÔNG BÁO QUY TẮC CƯỢC</b>"
+    head = f"<b>📢 THÔNG BÁO MỞ {do_name.upper()}</b>\n" if do_name else "<b>📢 THÔNG BÁO QUY TẮC ĐÁNH NHIỀU ĐỘ</b>\n"
     return (
-        f"{title}\n"
-        f"• Hệ thống cho phép <b>đánh song song nhiều độ cùng lúc</b> khi các độ chưa chốt.\n"
-        f"• Độ tiếp theo khách muốn đánh sẽ chỉ đánh được trong phạm vi <b>tiền gốc còn dư</b> của tài khoản.\n"
-        f"• Nếu muốn đánh vượt mốc hiện tại, khách <b>bắt buộc phải nạp thêm tiền</b>.\n"
-        f"• Tiền ăn thua khi chốt độ sẽ được <b>tính cộng dồn</b> (đã trừ 5% phế trên phần lời) để chơi tiếp các độ sau.\n"
-        f"• Khách có thể tạo lệnh <b>rút tiền</b> bất kỳ lúc nào (trong phạm vi số dư khả dụng)."
+        f"{head}"
+        f"Độ tiếp theo khách muốn đánh sẽ chỉ đánh nếu tk gốc còn. "
+        f"Khách muốn đánh bắt buộc phải nạp thêm tiền. "
+        f"Tiền ăn thua độ 1 sẽ được tính cộng dồn vào để bạn chơi độ tiếp theo. "
+        f"Và có thể cho rút bớt tiền lời từ tk gốc bất kì lúc nào."
     )
 
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Hạn mức tối đa từng cửa khi hỗ trợ đánh song song nhiều độ:
-    - Tiền gốc còn dư = max_capacity - rủi ro xấu nhất đang khóa ở các độ chưa chốt khác.
-    - Trần tổng cửa = tiền gốc còn dư + lời ròng cửa đối diện (sau 5% phế).
-    - Hạn mức còn lại mã này = trần tổng cửa - gốc đã đặt cùng cửa.
+    Tính hạn mức cho từng cửa trên độ đang chọn khi cho phép đánh song song nhiều độ:
+    - Bảo toàn phế 5% trên mọi đầu lời ròng.
+    - Cộng đủ phần vốn gốc còn dư của tài khoản vào hạn mức mã tiếp theo.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_unsettled_dos()]
@@ -224,10 +221,11 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         if not do or d["id"] != do["id"]
     )
 
-    remaining_capital = max(0.0, max_capacity - other_risk)
+    locked_capital = other_risk + cur_do_locked_capital
+    remaining_capital = max(0.0, max_capacity - locked_capital)
 
-    xanh_total_cap = max(0.0, remaining_capital + do_win_net_sum)
-    do_total_cap = max(0.0, remaining_capital + xanh_win_net_sum)
+    xanh_total_cap = max(0.0, xanh_lose_sum + remaining_capital + do_win_net_sum)
+    do_total_cap = max(0.0, do_lose_sum + remaining_capital + xanh_win_net_sum)
 
     max_xanh = max(0.0, xanh_total_cap - xanh_lose_sum)
     max_do = max(0.0, do_total_cap - do_lose_sum)
@@ -239,7 +237,7 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "all_open_bets": all_open_bets,
         "max_capacity": max_capacity,
         "total_open_principal": sum(float(b["amount"]) for b in all_open_bets),
-        "locked_capital": other_risk + cur_do_locked_capital,
+        "locked_capital": locked_capital,
         "base_unused": remaining_capital,
         "edge_bonus": 0.0,
         "unused_capital": remaining_capital,
@@ -348,7 +346,7 @@ def open_specific_do_logic(
 
     do_name = normalize_do_name(raw_do)
     if not do_name or do_name == "Độ":
-        return False, "\u274c Số hoặc tên độ không hợp lệ (ví dụ nhập <code>3</code> hoặc <code>Độ 3</code>).", None
+        return False, "❌ Số hoặc tên độ không hợp lệ (ví dụ nhập <code>3</code> hoặc <code>Độ 3</code>).", None
 
     held_names: list[str] = []
     if exclusive_active:
@@ -365,17 +363,17 @@ def open_specific_do_logic(
         do_lose=do_lose,
     )
     if not do_rec:
-        return False, f"\u274c Không thể mở <b>{do_name}</b>. Độ đã chốt không thể mở lại; hãy dùng tên độ mới.", None
+        return False, f"❌ Không thể mở <b>{do_name}</b>. Độ đã chốt không thể mở lại; hãy dùng tên độ mới.", None
 
     open_now = [str(d["name"]) for d in db.get_open_dos() if d.get("status") == "OPEN"]
     msg = (
-        f"\u2705 <b>ĐÃ MỞ {do_name.upper()}</b> "
+        f"✅ <b>ĐÃ MỞ {do_name.upper()}</b> "
         f"(XANH <code>{xanh_win:g}/{xanh_lose:g}</code> | ĐỎ <code>{do_win:g}/{do_lose:g}</code>).\n"
-        f"\u2022 Có thể đánh song song các độ đang mở: <b>{', '.join(open_now)}</b>.\n"
-        f"\u2022 Độ mới chỉ đánh được trong phạm vi tiền gốc còn dư; muốn vượt mốc cần nạp thêm tiền."
+        f"• Có thể đánh song song các độ đang mở: <b>{', '.join(open_now)}</b>.\n"
+        f"• Độ mới chỉ đánh được trong phạm vi tiền gốc còn dư; muốn vượt mốc cần nạp thêm tiền."
     )
     if held_names:
-        msg += f"\n\u2022 Đã chuyển sang trạng thái chờ/hoãn: <b>{', '.join(held_names)}</b>."
+        msg += f"\n• Đã chuyển sang trạng thái chờ/hoãn: <b>{', '.join(held_names)}</b>."
 
     return True, msg, do_rec
 
@@ -416,11 +414,11 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     if amount > allowed_budget + 1e-6:
         return (
             False,
-            f"\u274c Vượt hạn mức tổng cược cửa {side_norm} ({do['name']})!\n"
-            f"\u2022 Tiền gốc còn dư khả dụng: <b>{fmt_num(unused_capital)}</b>\n"
-            f"\u2022 Lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
-            f"\u2022 Tối đa có thể đặt mã này: <b>{fmt_num(allowed_budget)}</b>\n"
-            f"\u2022 Muốn đánh vượt mốc, vui lòng nạp thêm tiền vào tài khoản.",
+            f"❌ Vượt hạn mức tổng cược cửa {side_norm} ({do['name']})!\n"
+            f"• Tiền gốc còn dư: <b>{fmt_num(unused_capital)}</b>\n"
+            f"• Lời ròng cửa {opp_side} (sau 5% phế): <b>{fmt_num(opp_win_net_sum)}</b>\n"
+            f"• Hạn mức tối đa có thể đặt mã này: <b>{fmt_num(allowed_budget)}</b>\n"
+            f"• Muốn đánh vượt mốc, khách vui lòng nạp thêm tiền vào tài khoản.",
         )
 
     other_dos_worst_loss = sum(
@@ -436,9 +434,9 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         remain_risk = max(0.0, hard_risk_cap - other_dos_worst_loss)
         return (
             False,
-            f"\u274c Vượt trần rủi ro tối đa của tài khoản!\n"
-            f"\u2022 Rủi ro sau mã này: <b>{fmt_num(total_worst_loss)}</b> / Trần tối đa: <b>{fmt_num(hard_risk_cap)}</b>\n"
-            f"\u2022 Khả năng chịu rủi ro còn lại: <b>{fmt_num(remain_risk)}</b>",
+            f"❌ Vượt trần rủi ro tối đa của tài khoản!\n"
+            f"• Rủi ro sau mã này: <b>{fmt_num(total_worst_loss)}</b> / Trần tối đa: <b>{fmt_num(hard_risk_cap)}</b>\n"
+            f"• Khả năng chịu rủi ro còn lại: <b>{fmt_num(remain_risk)}</b>",
         )
 
     seq = int(do["bet_seq"])
@@ -458,13 +456,13 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
         price_str=price_str,
     )
 
-    side_label = "\U0001f7e2 XANH" if side_norm == "XANH" else "\U0001f534 ĐỎ"
+    side_label = "🟢 XANH" if side_norm == "XANH" else "🔴 ĐỎ"
     msg = (
-        f"\u2705 <b>ĐÃ NHẬN KÈO — {do['name']} | {side_label}</b>\n"
-        f"\u2022 Mã: <b>{code}</b> | Giá lúc đặt: <b>{price_str}</b>\n"
-        f"\u2022 Mức đánh: <b>{fmt_num(amount)}</b> (Thua mã này: <b>{fmt_num(calc['lose_amount'])}</b>)\n"
-        f"\u2022 Nếu {side_label} thắng: lời <b>{fmt_num(calc['win_net'])}</b> <i>(đã trừ 5% phế)</i>\n"
-        f"\u2022 Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
+        f"✅ <b>ĐÃ NHẬN KÈO — {do['name']} | {side_label}</b>\n"
+        f"• Mã: <b>{code}</b> | Giá lúc đặt: <b>{price_str}</b>\n"
+        f"• Mức đánh: <b>{fmt_num(amount)}</b> (Thua mã này: <b>{fmt_num(calc['lose_amount'])}</b>)\n"
+        f"• Nếu {side_label} thắng: lời <b>{fmt_num(calc['win_net'])}</b> <i>(đã trừ 5% phế)</i>\n"
+        f"• Ví: <b>{fmt_num(bal)}</b> | Nợ: <b>{fmt_num(debt)}/{fmt_num(debt_limit)}</b>"
     )
     return True, msg
 
