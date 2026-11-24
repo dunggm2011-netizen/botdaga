@@ -93,7 +93,7 @@ def init_db() -> None:
 
         cur.execute("""
             INSERT OR IGNORE INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-            VALUES ('Äá» 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
+            VALUES ('\u0110\u1ed9 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
         """)
 
         cur.execute("""
@@ -127,7 +127,7 @@ def get_setting(key: str, default: str = "") -> str:
         return str(row["val_text"]) if row and row["val_text"] is not None else default
 
 
-def get_user(user_id: int, first_name: str = "KhÃ¡ch", username: str = "") -> dict:
+def get_user(user_id: int, first_name: str = "Kh\xe1ch", username: str = "") -> dict:
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -188,7 +188,7 @@ def get_next_do_name() -> str:
     next_num = 1
     while next_num in used_nums:
         next_num += 1
-    return f"Äá» {next_num}"
+    return f"\u0110\u1ed9 {next_num}"
 
 
 def get_do_by_id(do_id: int) -> dict | None:
@@ -225,7 +225,7 @@ def create_new_do(
     do_name = name or get_next_do_name()
     existing = get_do_by_name(do_name)
     if existing and existing["status"] == "CLOSED":
-        raise ValueError("Äá» ÄÃ£ chá»t khÃ´ng thá» má» láº¡i")
+        raise ValueError("\u0110\u1ed9 \u0111\xe3 ch\u1ed1t kh\xf4ng th\u1ec3 m\u1edf l\u1ea1i")
     with get_conn() as conn:
         conn.execute(
             """
@@ -259,12 +259,12 @@ def add_bet_and_advance_seq(do_id: int, expected_seq: int, code: str,
                             do_name: str, user_id: int, side: str,
                             amount: float, win_net: float, lose_amount: float,
                             price_str: str) -> None:
-    """LÆ°u mÃ£ cÆ°á»£c vÃ  tÄng sá» thá»© tá»± trong cÃ¹ng má»t giao dá»ch."""
+    """L\u01b0u m\xe3 c\u01b0\u1ee3c v\xe0 t\u0103ng s\u1ed1 th\u1ee9 t\u1ef1 trong c\xf9ng m\u1ed9t giao d\u1ecbch."""
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         do = conn.execute("SELECT status, bet_seq FROM dos WHERE id=? AND name=?", (do_id, do_name)).fetchone()
         if not do or do["status"] != "OPEN" or int(do["bet_seq"]) != expected_seq:
-            raise ValueError("Äá» hoáº·c sá» thá»© tá»± ÄÃ£ thay Äá»i; hÃ£y thá»­ láº¡i")
+            raise ValueError("\u0110\u1ed9 ho\u1eb7c s\u1ed1 th\u1ee9 t\u1ef1 \u0111\xe3 thay \u0111\u1ed5i; h\xe3y th\u1eed l\u1ea1i")
         conn.execute("""INSERT INTO bets (code, do_name, user_id, side, amount,
                        win_net, lose_amount, price_str, status)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')""",
