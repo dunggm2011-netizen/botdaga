@@ -210,49 +210,26 @@ def _max_side_amount_within_capacity(
     if remain_risk <= 1e-9:
         return 0.0
 
-    bets = db.get_active_bets(do_name=do["name"], user_id=user_id)
-    xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
-    xanh_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH")
-    do_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "DO")
-    do_lose = sum(float(b["lose_amount"]) for b in bets if b["side"] == "DO")
-
     win_u, lose_u = get_side_price(do, side)
-    unit = calc_bet_numbers(1.0, win_u, lose_u)
-    u_win = float(unit["win_net"])
-    u_lose = float(unit["lose_amount"])
 
-    # Nếu đặt thêm vào XANH:
-    # - Nếu ĐỎ thắng: lỗ là (xanh_lose + u_lose * amt) - do_win_net
-    # - Nếu XANH thắng: lỗ là do_lose - (xanh_win_net + u_win * amt)
-    if side == "XANH":
-        cur_loss_if_do = xanh_lose - do_win_net
-        if u_lose > 1e-12:
-            cap_by_do = max(0.0, (remain_risk - cur_loss_if_do) / u_lose)
+    def _within_cap(amt: float) -> bool:
+        calc = calc_bet_numbers(amt, win_u, lose_u)
+        cur_loss = max_worst_case_loss(
+            user_id, do["name"], extra_bet={"side": side, **calc}
+        )
+        return (other_risk + cur_loss) <= (max_capacity + 1e-6)
+
+    if _within_cap(base_upper):
+        return base_upper
+
+    lo, hi = 0.0, base_upper
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        if _within_cap(mid):
+            lo = mid
         else:
-            cap_by_do = base_upper
-
-        cur_loss_if_xanh = do_lose - xanh_win_net
-        if cur_loss_if_xanh > remain_risk and u_win > 1e-12:
-            cap_by_xanh = max(0.0, (cur_loss_if_xanh - remain_risk) / u_win)
-        else:
-            cap_by_xanh = base_upper
-
-        return max(0.0, min(base_upper, cap_by_do, cap_by_xanh))
-
-    # Nếu đặt thêm vào ĐỎ:
-    cur_loss_if_xanh = do_lose - xanh_win_net
-    if u_lose > 1e-12:
-        cap_by_xanh = max(0.0, (remain_risk - cur_loss_if_xanh) / u_lose)
-    else:
-        cap_by_xanh = base_upper
-
-    cur_loss_if_do = xanh_lose - do_win_net
-    if cur_loss_if_do > remain_risk and u_win > 1e-12:
-        cap_by_do = max(0.0, (cur_loss_if_do - remain_risk) / u_win)
-    else:
-        cap_by_do = base_upper
-
-    return max(0.0, min(base_upper, cap_by_xanh, cap_by_do))
+            hi = mid
+    return max(0.0, lo)
 
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
@@ -285,14 +262,14 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     xanh_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "XANH")
     do_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == "DO")
 
-    cur_do_locked_capital = max(0.0, do_lose_sum - xanh_win_net_sum, xanh_lose_sum - do_win_net_sum)
+    cur_do_worst = max_worst_case_loss(user_id, do["name"]) if do else 0.0
     other_risk = sum(
         max_worst_case_loss(user_id, d["name"])
         for d in open_dos
         if not do or d["id"] != do["id"]
     )
 
-    locked_capital = other_risk + cur_do_locked_capital
+    locked_capital = other_risk + cur_do_worst
     remaining_capital = max(0.0, max_capacity - locked_capital)
 
     raw_max_xanh = max(0.0, remaining_capital + do_win_net_sum)
@@ -470,7 +447,8 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
     if do_id:
         do = db.get_do_by_id(do_id)
     else:
-        do = open_dos[-1] if open_dos else None
+        active_open = [d for d in open_dos if d.get("status") == "OPEN"]
+        do = active_open[-1] if active_open else None
 
     if not do or do.get("status") != "OPEN":
         return False, "Độ này hiện đang tạm hoãn, khóa hoặc đã chốt."
@@ -668,7 +646,7 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
 
     for d_id in do_ids:
         do = db.get_do_by_id(d_id)
-        if not do or do.get("status") != "OPEN":
+        if not do or do.get("status") == "CLOSED":
             continue
         d_name = do["name"]
         settled_names.append(d_name)
@@ -709,7 +687,7 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
             "debt": debt,
         })
 
-    open_after = db.get_open_dos()
+    open_after = db.get_unsettled_dos()
     return {
         "do_names": settled_names,
         "result": result,
@@ -747,7 +725,7 @@ def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict
 
 
 def build_live_report_text() -> str:
-    open_dos = [d for d in db.get_open_dos() if d.get("status") == "OPEN"]
+    open_dos = [d for d in db.get_unsettled_dos() if d.get("status") != "CLOSED"]
     if not open_dos:
         return "<b>THỐNG KÊ CÁC ĐỘ ĐANG MỞ</b>\n\n<i>Hiện không có độ nào đang mở.</i>"
 
@@ -781,8 +759,9 @@ def build_live_report_text() -> str:
                 f"{side_icon} <b>{fmt_num(float(b['amount']))}</b> (giá {b['price_str']})"
             )
 
+        status_badge = f" [{do['status']}]" if do.get("status") != "OPEN" else ""
         blocks.append(
-            f"<b>\U0001f4cc {do['name']}</b> (XANH <code>{float(do['xanh_win']):g}/{float(do['xanh_lose']):g}</code> | "
+            f"<b>\U0001f4cc {do['name']}{status_badge}</b> (XANH <code>{float(do['xanh_win']):g}/{float(do['xanh_lose']):g}</code> | "
             f"ĐỎ <code>{float(do['do_win']):g}/{float(do['do_lose']):g}</code>)\n"
             f"\u2022 Tổng XANH: <b>{fmt_num(tot_xanh)}</b> | Tổng ĐỎ: <b>{fmt_num(tot_do)}</b>\n"
             + ("\n".join(user_lines) if user_lines else "  <i>Chưa có cược.</i>")
