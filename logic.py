@@ -126,13 +126,6 @@ def calc_bet_numbers(amount: float, win_u: float, lose_u: float) -> dict:
 
 
 def get_do_pnl_scenarios(user_id: int, do_name: str, extra_bet: dict | None = None) -> dict:
-    """
-    Tính lợi nhuận ròng dự kiến (đã trừ 5% phế) của 1 độ ở 2 kịch bản:
-    - XANH thắng: pnl_if_xanh = tổng win_net cửa XANH - tổng lose_amount cửa ĐỎ
-    - ĐỎ thắng:   pnl_if_do   = tổng win_net cửa ĐỎ   - tổng lose_amount cửa XANH
-    - worst_loss: mức lỗ xấu nhất có thể xảy ra ở độ này (>= 0)
-    - guaranteed_min_profit: đầu lời chắc chắn nhỏ hơn giữa 2 cửa (>= 0 nếu cả 2 cửa đều có lời dương, ngược lại = 0)
-    """
     bets = db.get_active_bets(do_name=do_name, user_id=user_id)
 
     xanh_win_net = sum(float(b["win_net"]) for b in bets if b["side"] == "XANH")
@@ -196,9 +189,9 @@ def _max_side_amount_within_capacity(
 ) -> float:
     """
     Siết mức đặt tối đa cho `side` trên `do`:
-    1) Không vượt `base_upper` (vốn gốc khả dụng + phần xoay vòng hợp lệ).
+    1) Không vượt `base_upper`.
     2) Tổng rủi ro xấu nhất của toàn bộ các độ chưa quyết toán sau khi thêm mã
-       không vượt `max_capacity` (tuyệt đối không phát sinh số dư âm).
+       không vượt `max_capacity`.
     """
     if base_upper <= 0.0 or max_capacity <= 0.0:
         return 0.0
@@ -233,19 +226,56 @@ def _max_side_amount_within_capacity(
     return max(0.0, lo)
 
 
+def _calc_cycle_limit_for_side(
+    side: str,
+    do: dict,
+    existing_bets: list[dict],
+    remaining_capital: float,
+    other_guaranteed_min: float,
+) -> float:
+    """
+    - Nếu độ chưa có mã nào (mã đầu tiên): dựa trên tiền gốc/khả dụng của tài khoản + đầu lời chắc chắn độ khác.
+    - Từ mã thứ 2 trở đi: lấy vốn gốc còn dư + tiền ăn được của mã đối diện (đã trừ 5% phế)
+      - 5% phế trên phần ăn vượt/chênh lệch của mã trước đó để không bị tính lố khi xoay vòng nhiều mã.
+    """
+    opp_side = "DO" if side == "XANH" else "XANH"
+    opp_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
+    opp_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == opp_side)
+
+    same_win_net_sum = sum(float(b["win_net"]) for b in existing_bets if b["side"] == side)
+    same_lose_sum = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side)
+
+    # Mã đầu tiên của độ
+    if not existing_bets:
+        return max(0.0, remaining_capital + other_guaranteed_min)
+
+    # Từ mã thứ 2 trở đi: tiền ăn được của mã đối diện đã trừ 5% phế + vốn gốc còn dư
+    # Trừ đi phần 5% của mã trước (nếu có lời ròng vượt mức đang đánh cùng cửa) để giữ biên an toàn
+    win_u, lose_u = get_side_price(do, side)
+    pay_ratio = (lose_u / win_u) if win_u > 0 else 1.0
+    net_factor = (1.0 - FEE_RATE) * pay_ratio
+
+    # Phần vốn gốc thực sự còn lại sau khi đã trừ đi phần gốc đã mất của cửa đối diện và cửa hiện tại
+    # nhưng được cộng phần đầu lời ròng cửa đối diện (đã trừ 5% phế)
+    raw_pool = remaining_capital + other_guaranteed_min + opp_win_net_sum
+
+    # Nếu cửa đối diện đã đặt nhiều hơn cửa hiện tại, phần chênh lệch lời ròng trừ thêm 5% phế của vòng trước
+    prev_last_bet = existing_bets[-1]
+    prev_fee_deduction = 0.0
+    if prev_last_bet["side"] == side:
+        prev_fee_deduction = float(prev_last_bet["win_net"]) * FEE_RATE
+
+    adjusted_pool = max(0.0, raw_pool - prev_fee_deduction)
+    if net_factor <= 1e-9:
+        return adjusted_pool
+    return max(0.0, adjusted_pool)
+
+
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     """
-    Công thức tính hạn mức xoay vòng XANH - ĐỎ & chuyển hạn mức giữa các độ:
-    - Tài khoản có năng lực chịu rủi ro max_capacity = balance + (debt_limit - debt).
-    - Trên cùng độ:
-      * Tiền gốc còn dư = max(0, max_capacity - tổng rủi ro xấu nhất các độ chưa quyết toán).
-      * Xoay vòng qua lại XANH - ĐỎ: mỗi cửa được phép dùng (vốn gốc còn dư + đầu lời ròng cửa đối diện sau 5% phế),
-        nhưng luôn siết theo trần rủi ro xấu nhất của toàn hệ thống <= max_capacity.
-    - Chuyển sang độ tiếp theo / quay lại độ cũ:
-      * Các độ chưa quyết toán khác khóa đúng phần rủi ro xấu nhất (worst_loss) của từng độ;
-        nếu độ khác đã khóa chắc cả 2 đầu đều dương (guaranteed_min_profit > 0), phần đầu lời nhỏ hơn
-        được cộng đệm vào vốn khả dụng cho độ tiếp theo; nếu 1 đầu ăn 0 đồng thì đệm = 0.
-      * Quay lại độ cũ cũng chỉ được đánh trong phạm vi vốn gốc còn dư thực tế.
+    - Mã đầu tiên: dựa trên hạn mức tiền tài khoản khả dụng.
+    - Từ mã thứ 2 trở đi: tính theo tiền gốc tài khoản + tiền ăn được của mã đối diện (đã trừ 5% phế)
+      và khấu trừ phần 5% của mã trước, luôn bị siết bởi trần rủi ro xấu nhất <= max_capacity.
     """
     u = db.get_user(user_id)
     open_dos = [d for d in db.get_unsettled_dos() if d.get("status") != "CLOSED"]
@@ -278,21 +308,20 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     )
     cur_do_worst = max_worst_case_loss(user_id, do["name"]) if do else 0.0
 
-    # Vốn gốc còn dư sau khi trừ toàn bộ rủi ro đang khóa ở các độ chưa quyết toán
     remaining_capital = max(0.0, max_capacity - total_worst_now)
-
-    # Phần đầu lời nhỏ hơn của các độ khác (chỉ > 0 nếu cả 2 cửa độ đó đều có lời ròng dương)
     other_guaranteed_min = sum(
         get_do_pnl_scenarios(user_id, d["name"])["guaranteed_min_profit"]
         for d in open_dos
         if not do or d["id"] != do["id"]
     )
 
-    # Trên độ hiện tại: xoay vòng theo đầu lời ròng cửa đối diện + vốn gốc còn dư + đầu lời chắc chắn độ khác
-    raw_max_xanh = max(0.0, remaining_capital + other_guaranteed_min + do_win_net_sum)
-    raw_max_do = max(0.0, remaining_capital + other_guaranteed_min + xanh_win_net_sum)
-
     if do:
+        raw_max_xanh = _calc_cycle_limit_for_side(
+            "XANH", do, existing_bets, remaining_capital, other_guaranteed_min
+        )
+        raw_max_do = _calc_cycle_limit_for_side(
+            "DO", do, existing_bets, remaining_capital, other_guaranteed_min
+        )
         max_xanh = _max_side_amount_within_capacity(
             user_id, do, "XANH", open_dos, raw_max_xanh, max_capacity
         )
@@ -300,10 +329,9 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
             user_id, do, "DO", open_dos, raw_max_do, max_capacity
         )
     else:
-        max_xanh = raw_max_xanh
-        max_do = raw_max_do
+        max_xanh = max(0.0, remaining_capital + other_guaranteed_min)
+        max_do = max(0.0, remaining_capital + other_guaranteed_min)
 
-    # Tiền lời dự kiến chưa quyết toán của độ hiện tại
     cur_sc = get_do_pnl_scenarios(user_id, do["name"]) if do else {
         "pnl_if_xanh": 0.0,
         "pnl_if_do": 0.0,
@@ -534,10 +562,6 @@ def place_bet_logic(
 
 
 def apply_deposit_logic(target_uid: int, amount: float, staff_id: int = 0) -> dict:
-    """
-    Xác nhận tiền nạp: cộng dồn vào balance, lưu lịch sử giao dịch.
-    Không tính tiền khách nạp vào là doanh thu hay lợi nhuận của casino.
-    """
     if not isfinite(float(amount)) or amount <= 0:
         raise ValueError("Số tiền nạp phải hữu hạn và lớn hơn 0.")
     u = db.get_user(target_uid)
@@ -574,7 +598,6 @@ def create_withdrawal_logic(
     u = db.get_user(user_id)
     bal = float(u["balance"])
 
-    # Tiền rút không được vượt quá phần tiền khả dụng chưa bị khóa rủi ro
     lim = get_user_betting_limit_info(user_id)
     withdrawable_max = min(bal, lim["unused_capital"])
 
@@ -688,10 +711,6 @@ def reject_withdrawal_logic(w_id: int, staff_id: int = 0) -> tuple[bool, str, di
 
 
 def settle_single_do_no_reopen(do: dict, result: str) -> tuple[dict[int, float], float]:
-    """
-    Quyết toán đúng 1 lần cho 1 độ:
-    - Trả về (dict net từng khách, tổng tiền biện 5% thu được ở độ này).
-    """
     do_name = do["name"]
     bets = db.get_active_bets(do_name=do_name)
 
@@ -709,7 +728,6 @@ def settle_single_do_no_reopen(do: dict, result: str) -> tuple[dict[int, float],
         if b["side"] == result:
             db.update_bet_status(int(b["id"]), "WON")
             win_net = float(b["win_net"])
-            # win_net = gross * 0.95 => fee_5pct = win_net * (0.05 / 0.95)
             fee_b = win_net * (FEE_RATE / (1.0 - FEE_RATE)) if FEE_RATE < 1.0 else 0.0
             total_fee_5pct += fee_b
             per_user_net[uid] += win_net
@@ -788,7 +806,6 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str, staff_id: int = 0)
             "debt": debt,
         })
 
-    # Cập nhật lợi nhuận thực thu casino từ chênh lệch thắng/thua đã quyết toán
     house_delta = -sum(combined_net.values())
     if abs(house_delta) > 1e-9:
         db.add_realized_profit(house_delta)
@@ -937,9 +954,6 @@ def build_pnl_report_text() -> str:
 
 
 def build_daily_report_text(day_key: str | None = None) -> str:
-    """
-    Báo cáo tổng hợp cuối ngày đầy đủ 10 chỉ tiêu đối soát.
-    """
     now_dt = datetime.now(VN_TZ)
     target_day = day_key or now_dt.strftime("%Y-%m-%d")
     now_str = now_dt.strftime("%H:%M - %d/%m/%Y")
@@ -973,9 +987,7 @@ def build_daily_report_text(day_key: str | None = None) -> str:
     for d in unsettled_dos:
         unsettled_principal += sum(float(b["amount"]) for b in db.get_active_bets(do_name=d["name"]))
 
-    # Đối soát chênh lệch: (Tổng nạp - Tổng rút + Tổng ăn thua ròng khách) so với Tổng số dư hiện tại của khách
     expected_user_balance = total_deposit - total_withdraw + total_user_pnl - total_pending_withdraw
-    # Nếu là ngày tiếp theo đã có số dư đầu kỳ, kiểm tra chênh lệch lũy kế
     diff_reconcile = 0.0 if len(txs) == 0 else (total_user_balance - expected_user_balance)
 
     lines = [
