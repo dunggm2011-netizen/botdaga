@@ -224,7 +224,6 @@ def _calc_cycle_limit_for_side(
         return root_cap
 
     opp_side = "DO" if side == "XANH" else "XANH"
-    # opp_leg_net đã là tiền ăn ròng của cửa đối diện (đã trừ 5% phế)
     opp_leg_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
     same_placed = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side)
     same_leg_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == side)
@@ -233,6 +232,7 @@ def _calc_cycle_limit_for_side(
         return max(0.0, root_cap + opp_leg_net - same_placed)
 
     return max(0.0, root_cap + max(opp_leg_net, same_leg_net) - same_placed)
+    
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     u = db.get_user(user_id)
