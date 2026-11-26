@@ -1,9 +1,7 @@
 import sqlite3
-import threading
-from config import DB_PATH
+from pathlib import Path
 
-# Lock để đảm bảo add_bet + tăng bet_seq là atomic (tránh race condition)
-_bet_lock = threading.Lock()
+DB_PATH = Path(__file__).parent / "ga_don.db"
 
 
 def get_conn() -> sqlite3.Connection:
@@ -12,37 +10,38 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, col_name: str, col_def: str) -> None:
+    cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if col_name not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+
+
 def init_db() -> None:
     with get_conn() as conn:
-        cur = conn.cursor()
-
-        cur.execute("""
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                username TEXT DEFAULT '',
-                balance REAL DEFAULT 0.0,
-                debt REAL DEFAULT 0.0,
-                debt_limit REAL DEFAULT 0.0,
-                pnl_net REAL DEFAULT 0.0,
-                last_payout_info TEXT DEFAULT ''
-            )
-        """)
+                name TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT '',
+                balance REAL NOT NULL DEFAULT 0.0,
+                debt REAL NOT NULL DEFAULT 0.0,
+                debt_limit REAL NOT NULL DEFAULT 0.0,
+                pnl_net REAL NOT NULL DEFAULT 0.0,
+                last_payout_info TEXT NOT NULL DEFAULT ''
+            );
 
-        cur.execute("""
             CREATE TABLE IF NOT EXISTS dos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                xanh_win REAL NOT NULL DEFAULT 10.0,
+                xanh_lose REAL NOT NULL DEFAULT 10.0,
+                do_win REAL NOT NULL DEFAULT 10.0,
+                do_lose REAL NOT NULL DEFAULT 10.0,
                 status TEXT NOT NULL DEFAULT 'OPEN',
-                xanh_win REAL DEFAULT 10.0,
-                xanh_lose REAL DEFAULT 10.0,
-                do_win REAL DEFAULT 10.0,
-                do_lose REAL DEFAULT 10.0,
-                bet_seq INTEGER DEFAULT 1
-            )
-        """)
+                bet_seq INTEGER NOT NULL DEFAULT 1
+            );
 
-        cur.execute("""
             CREATE TABLE IF NOT EXISTS bets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT NOT NULL,
@@ -53,122 +52,121 @@ def init_db() -> None:
                 win_net REAL NOT NULL,
                 lose_amount REAL NOT NULL,
                 price_str TEXT NOT NULL,
-                status TEXT DEFAULT 'ACTIVE'
-            )
-        """)
+                status TEXT NOT NULL DEFAULT 'ACTIVE',
+                created_at TEXT NOT NULL DEFAULT '',
+                staff_id INTEGER NOT NULL DEFAULT 0
+            );
 
-        cur.execute("""
             CREATE TABLE IF NOT EXISTS withdrawals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 amount REAL NOT NULL,
-                payout_text TEXT DEFAULT '',
-                qr_file_id TEXT DEFAULT '',
-                assigned_staff_id INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'PENDING',
-                created_at TEXT NOT NULL
-            )
-        """)
+                payout_text TEXT NOT NULL DEFAULT '',
+                qr_file_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                assigned_staff_id INTEGER NOT NULL DEFAULT 0,
+                approved_by INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT ''
+            );
 
-        cur.execute("""
+            CREATE TABLE IF NOT EXISTS wallet_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_type TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                balance_before REAL NOT NULL,
+                balance_after REAL NOT NULL,
+                staff_id INTEGER NOT NULL DEFAULT 0,
+                ref_code TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                day_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS settled_dos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 do_name TEXT NOT NULL,
                 result TEXT NOT NULL,
                 summary_text TEXT NOT NULL,
                 day_key TEXT NOT NULL,
-                settled_at TEXT NOT NULL
-            )
-        """)
+                settled_at TEXT NOT NULL,
+                total_fee_5pct REAL NOT NULL DEFAULT 0.0,
+                house_net REAL NOT NULL DEFAULT 0.0
+            );
 
-        cur.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
-                val_text TEXT DEFAULT ''
+                value TEXT NOT NULL
+            );
+            """
+        )
+
+        # Migration an toàn cho DB cũ nếu đã tồn tại
+        _ensure_column(conn, "bets", "created_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "bets", "staff_id", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "withdrawals", "approved_by", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "settled_dos", "total_fee_5pct", "REAL NOT NULL DEFAULT 0.0")
+        _ensure_column(conn, "settled_dos", "house_net", "REAL NOT NULL DEFAULT 0.0")
+
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('realized_profit', '0.0')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('assigned_approver_id', '0')")
+
+        cur = conn.execute("SELECT COUNT(*) AS c FROM dos")
+        if cur.fetchone()["c"] == 0:
+            conn.execute(
+                """
+                INSERT INTO dos (name, xanh_win, xanh_lose, do_win, do_lose, status, bet_seq)
+                VALUES ('Độ 1', 10.0, 10.0, 10.0, 10.0, 'OPEN', 1)
+                """
             )
-        """)
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS system_meta (
-                key TEXT PRIMARY KEY,
-                val_real REAL DEFAULT 0.0
-            )
-        """)
-
-        cur.execute("""
-            INSERT OR IGNORE INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-            VALUES ('Độ 1', 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
-        """)
-
-        cur.execute("""
-            INSERT OR IGNORE INTO settings (key, val_text)
-            VALUES ('assigned_approver_id', '0')
-        """)
-
-        cur.execute("""
-            INSERT OR IGNORE INTO system_meta (key, val_real)
-            VALUES ('realized_profit', 0.0)
-        """)
-
         conn.commit()
 
 
-# ============================================================
-# SETTINGS
-# ============================================================
+# ==================== SETTINGS ====================
+def get_setting(key: str, default: str = "") -> str:
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else default
 
-def set_setting(key: str, val_text: str) -> None:
+
+def set_setting(key: str, value: str) -> None:
     with get_conn() as conn:
         conn.execute(
-            """
-            INSERT INTO settings (key, val_text) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET val_text = excluded.val_text
-            """,
-            (key, val_text),
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
         )
         conn.commit()
 
 
-def get_setting(key: str, default: str = "") -> str:
+def get_realized_profit() -> float:
+    return float(get_setting("realized_profit", "0.0"))
+
+
+def add_realized_profit(delta: float) -> float:
+    new_val = get_realized_profit() + delta
+    set_setting("realized_profit", str(new_val))
+    return new_val
+
+
+# ==================== USERS ====================
+def get_user(user_id: int, name: str = "", username: str = "") -> dict:
     with get_conn() as conn:
-        row = conn.execute("SELECT val_text FROM settings WHERE key = ?", (key,)).fetchone()
-        return str(row["val_text"]) if row and row["val_text"] is not None else default
-
-
-# ============================================================
-# USERS
-# ============================================================
-
-def get_user(user_id: int, first_name: str = "Khách", username: str = "") -> dict:
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        row = cur.fetchone()
-
+        row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
-            safe_name = first_name or f"User_{user_id}"
-            cur.execute(
-                """
-                INSERT INTO users (user_id, name, username, balance, debt, debt_limit, pnl_net, last_payout_info)
-                VALUES (?, ?, ?, 0.0, 0.0, 0.0, 0.0, '')
-                """,
-                (user_id, safe_name, username or ""),
+            display = name.strip() or f"Khách {user_id}"
+            conn.execute(
+                "INSERT INTO users (user_id, name, username) VALUES (?, ?, ?)",
+                (user_id, display, username or ""),
             )
             conn.commit()
-            cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-            row = cur.fetchone()
+            row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         else:
-            new_name = first_name if first_name else row["name"]
-            new_user = username if username else row["username"]
-            if new_name != row["name"] or new_user != row["username"]:
-                cur.execute(
-                    "UPDATE users SET name = ?, username = ? WHERE user_id = ?",
-                    (new_name, new_user, user_id),
-                )
-                conn.commit()
-                cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-                row = cur.fetchone()
-
+            if name and name != row["name"]:
+                conn.execute("UPDATE users SET name = ? WHERE user_id = ?", (name, user_id))
+            if username is not None and username != row["username"]:
+                conn.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
+            conn.commit()
+            row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row)
 
 
@@ -178,33 +176,92 @@ def get_all_users() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def update_user_fields(user_id: int, **kwargs) -> None:
-    if not kwargs:
+def update_user_fields(user_id: int, **fields) -> None:
+    if not fields:
         return
-    cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
-    vals = list(kwargs.values()) + [user_id]
+    if "balance" in fields and float(fields["balance"]) < 0.0:
+        fields["balance"] = 0.0
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [user_id]
     with get_conn() as conn:
         conn.execute(f"UPDATE users SET {cols} WHERE user_id = ?", vals)
         conn.commit()
 
 
-# ============================================================
-# DOS
-# ============================================================
-
-def get_next_do_name() -> str:
+# ==================== WALLET TRANSACTIONS ====================
+def log_wallet_transaction(
+    tx_type: str,
+    user_id: int,
+    amount: float,
+    balance_before: float,
+    balance_after: float,
+    staff_id: int = 0,
+    ref_code: str = "",
+    note: str = "",
+    day_key: str = "",
+    created_at: str = "",
+) -> int:
     with get_conn() as conn:
-        rows = conn.execute("SELECT name FROM dos").fetchall()
-    used_nums: set[int] = set()
-    for r in rows:
-        parts = str(r["name"]).strip().split()
-        if parts and parts[-1].isdigit():
-            used_nums.add(int(parts[-1]))
+        cur = conn.execute(
+            """
+            INSERT INTO wallet_transactions
+            (tx_type, user_id, amount, balance_before, balance_after, staff_id, ref_code, note, day_key, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tx_type,
+                user_id,
+                amount,
+                balance_before,
+                balance_after,
+                staff_id,
+                ref_code,
+                note,
+                day_key,
+                created_at,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
 
-    next_num = 1
-    while next_num in used_nums:
-        next_num += 1
-    return f"Độ {next_num}"
+
+def get_wallet_transactions_by_day(day_key: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM wallet_transactions WHERE day_key = ? ORDER BY id ASC",
+            (day_key,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_user_wallet_transactions(user_id: int, limit: int = 15) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ==================== DOS (ĐỘ ĐANG MỞ / TẠM DỪNG / CHỜ KQ) ====================
+def get_open_dos() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_unsettled_dos() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dos WHERE status IN ('OPEN', 'HOLD', 'WAITING') ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_all_dos() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM dos ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
 
 
 def get_do_by_id(do_id: int) -> dict | None:
@@ -215,102 +272,44 @@ def get_do_by_id(do_id: int) -> dict | None:
 
 def get_do_by_name(name: str) -> dict | None:
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM dos WHERE name = ?", (name,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM dos WHERE name = ? ORDER BY id DESC LIMIT 1",
+            (name,),
+        ).fetchone()
         return dict(row) if row else None
 
 
-def get_open_dos() -> list[dict]:
-    """Chỉ trả về các độ đang OPEN."""
-    with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
-        if not rows:
-            next_name = get_next_do_name()
-            conn.execute(
-                """
-                INSERT INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-                VALUES (?, 'OPEN', 10.0, 10.0, 10.0, 10.0, 1)
-                """,
-                (next_name,),
-            )
-            conn.commit()
-            rows = conn.execute("SELECT * FROM dos WHERE status = 'OPEN' ORDER BY id ASC").fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_unsettled_dos() -> list[dict]:
-    """
-    Trả về các độ CHƯA CHỐT: OPEN + HOLD.
-    Dùng cho logic tính hạn mức song song nhiều độ.
-    """
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM dos WHERE status IN ('OPEN', 'HOLD') ORDER BY id ASC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def create_new_do(
-    name: str | None = None,
+def create_do(
+    name: str,
     xanh_win: float = 10.0,
     xanh_lose: float = 10.0,
     do_win: float = 10.0,
     do_lose: float = 10.0,
-) -> dict:
-    do_name = name or get_next_do_name()
+    status: str = "OPEN",
+) -> int:
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
-            INSERT INTO dos (name, status, xanh_win, xanh_lose, do_win, do_lose, bet_seq)
-            VALUES (?, 'OPEN', ?, ?, ?, ?, 1)
-            ON CONFLICT(name) DO UPDATE SET
-                status = 'OPEN',
-                xanh_win = excluded.xanh_win,
-                xanh_lose = excluded.xanh_lose,
-                do_win = excluded.do_win,
-                do_lose = excluded.do_lose,
-                bet_seq = 1
+            INSERT INTO dos (name, xanh_win, xanh_lose, do_win, do_lose, status, bet_seq)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
             """,
-            (do_name, xanh_win, xanh_lose, do_win, do_lose),
+            (name, xanh_win, xanh_lose, do_win, do_lose, status),
         )
         conn.commit()
-    return get_do_by_name(do_name)  # type: ignore
+        return int(cur.lastrowid)
 
 
-def update_do(do_id: int, **kwargs) -> None:
-    if not kwargs:
+def update_do(do_id: int, **fields) -> None:
+    if not fields:
         return
-    cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
-    vals = list(kwargs.values()) + [do_id]
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [do_id]
     with get_conn() as conn:
         conn.execute(f"UPDATE dos SET {cols} WHERE id = ?", vals)
         conn.commit()
 
 
-# ============================================================
-# BETS
-# ============================================================
-
-def add_bet_record(
-    code: str,
-    do_name: str,
-    user_id: int,
-    side: str,
-    amount: float,
-    win_net: float,
-    lose_amount: float,
-    price_str: str,
-) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO bets (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-            """,
-            (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
-        )
-        conn.commit()
-
-
+# ==================== BETS ====================
 def add_bet_and_advance_seq(
     do_id: int,
     expected_seq: int,
@@ -322,35 +321,28 @@ def add_bet_and_advance_seq(
     win_net: float,
     lose_amount: float,
     price_str: str,
-) -> None:
-    """
-    Thêm bet + tăng bet_seq trong 1 lock (atomic với các thread khác).
-    Nếu bet_seq đã thay đổi (race condition) → raise RuntimeError để caller retry.
-    """
-    with _bet_lock:
-        with get_conn() as conn:
-            cur = conn.cursor()
-            row = cur.execute(
-                "SELECT bet_seq FROM dos WHERE id = ?", (do_id,)
-            ).fetchone()
-            if not row:
-                raise RuntimeError(f"Không tìm thấy độ id={do_id}")
-            if int(row["bet_seq"]) != expected_seq:
-                raise RuntimeError(
-                    f"bet_seq conflict: expected={expected_seq}, actual={row['bet_seq']}"
-                )
-            cur.execute(
-                """
-                INSERT INTO bets (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-                """,
-                (code, do_name, user_id, side, amount, win_net, lose_amount, price_str),
-            )
-            cur.execute(
-                "UPDATE dos SET bet_seq = ? WHERE id = ?",
-                (expected_seq + 1, do_id),
-            )
-            conn.commit()
+    created_at: str = "",
+    staff_id: int = 0,
+) -> int:
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "UPDATE dos SET bet_seq = bet_seq + 1 WHERE id = ? AND status = 'OPEN' AND bet_seq = ?",
+            (do_id, expected_seq),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError("Trạng thái độ hoặc số thứ tự mã đã thay đổi, vui lòng thử lại.")
+
+        cur_bet = conn.execute(
+            """
+            INSERT INTO bets (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, status, created_at, staff_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+            """,
+            (code, do_name, user_id, side, amount, win_net, lose_amount, price_str, created_at, staff_id),
+        )
+        conn.commit()
+        return int(cur_bet.lastrowid)
 
 
 def get_active_bets(do_name: str | None = None, user_id: int | None = None) -> list[dict]:
@@ -359,23 +351,13 @@ def get_active_bets(do_name: str | None = None, user_id: int | None = None) -> l
     if do_name:
         query += " AND do_name = ?"
         params.append(do_name)
-    if user_id is not None:
+    if user_id:
         query += " AND user_id = ?"
         params.append(user_id)
     query += " ORDER BY id ASC"
-
     with get_conn() as conn:
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
-
-
-def update_bets_status_by_do(do_name: str, status: str) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE bets SET status = ? WHERE do_name = ? AND status = 'ACTIVE'",
-            (status, do_name),
-        )
-        conn.commit()
 
 
 def update_bet_status(bet_id: int, status: str) -> None:
@@ -384,10 +366,13 @@ def update_bet_status(bet_id: int, status: str) -> None:
         conn.commit()
 
 
-# ============================================================
-# WITHDRAWALS
-# ============================================================
+def update_bets_status_by_do(do_name: str, status: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE bets SET status = ? WHERE do_name = ? AND status = 'ACTIVE'", (status, do_name))
+        conn.commit()
 
+
+# ==================== WITHDRAWALS ====================
 def create_withdrawal(
     user_id: int,
     amount: float,
@@ -397,11 +382,10 @@ def create_withdrawal(
     created_at: str,
 ) -> int:
     with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
+        cur = conn.execute(
             """
-            INSERT INTO withdrawals (user_id, amount, payout_text, qr_file_id, assigned_staff_id, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+            INSERT INTO withdrawals (user_id, amount, payout_text, qr_file_id, status, assigned_staff_id, created_at)
+            VALUES (?, ?, ?, ?, 'PENDING', ?, ?)
             """,
             (user_id, amount, payout_text, qr_file_id, assigned_staff_id, created_at),
         )
@@ -415,38 +399,46 @@ def get_withdrawal(w_id: int) -> dict | None:
         return dict(row) if row else None
 
 
-def update_withdrawal(w_id: int, **kwargs) -> None:
-    if not kwargs:
+def get_pending_withdrawals_total() -> float:
+    with get_conn() as conn:
+        row = conn.execute("SELECT COALESCE(SUM(amount), 0.0) AS tot FROM withdrawals WHERE status = 'PENDING'").fetchone()
+        return float(row["tot"]) if row else 0.0
+
+
+def update_withdrawal(w_id: int, **fields) -> None:
+    if not fields:
         return
-    cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
-    vals = list(kwargs.values()) + [w_id]
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [w_id]
     with get_conn() as conn:
         conn.execute(f"UPDATE withdrawals SET {cols} WHERE id = ?", vals)
         conn.commit()
 
 
-# ============================================================
-# SETTLED DOS
-# ============================================================
-
-def insert_settled_do(do_name: str, result: str, summary_text: str, day_key: str, settled_at: str) -> None:
+# ==================== SETTLED DOS LOG ====================
+def insert_settled_do(
+    do_name: str,
+    result: str,
+    summary_text: str,
+    day_key: str,
+    settled_at: str,
+    total_fee_5pct: float = 0.0,
+    house_net: float = 0.0,
+) -> None:
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO settled_dos (do_name, result, summary_text, day_key, settled_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO settled_dos (do_name, result, summary_text, day_key, settled_at, total_fee_5pct, house_net)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (do_name, result, summary_text, day_key, settled_at),
+            (do_name, result, summary_text, day_key, settled_at, total_fee_5pct, house_net),
         )
         conn.commit()
 
 
 def get_settled_dos_by_day(day_key: str) -> list[dict]:
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM settled_dos WHERE day_key = ? ORDER BY id ASC",
-            (day_key,),
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM settled_dos WHERE day_key = ? ORDER BY id ASC", (day_key,)).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -454,21 +446,3 @@ def clear_settled_dos_by_day(day_key: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM settled_dos WHERE day_key = ?", (day_key,))
         conn.commit()
-
-
-# ============================================================
-# SYSTEM META
-# ============================================================
-
-def get_realized_profit() -> float:
-    with get_conn() as conn:
-        row = conn.execute("SELECT val_real FROM system_meta WHERE key = 'realized_profit'").fetchone()
-        return float(row["val_real"]) if row else 0.0
-
-
-def add_realized_profit(delta: float) -> float:
-    current = get_realized_profit() + delta
-    with get_conn() as conn:
-        conn.execute("UPDATE system_meta SET val_real = ? WHERE key = 'realized_profit'", (current,))
-        conn.commit()
-    return current
