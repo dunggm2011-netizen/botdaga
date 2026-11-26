@@ -173,6 +173,45 @@ def total_unsettled_worst_case_loss(
             total += max_worst_case_loss(user_id, d_name)
     return total
 
+def _max_side_amount_within_capacity(
+    user_id: int,
+    do: dict,
+    side: str,
+    open_dos: list[dict],
+    base_upper: float,
+    max_capacity: float,
+) -> float:
+    if base_upper <= 0.0 or max_capacity <= 0.0:
+        return 0.0
+
+    other_risk = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in open_dos
+        if d["id"] != do["id"]
+    )
+    if other_risk > max_capacity + 1e-6:
+        return 0.0
+
+    win_u, lose_u = get_side_price(do, side)
+
+    def _within_cap(amt: float) -> bool:
+        calc = calc_bet_numbers(amt, win_u, lose_u)
+        cur_loss = max_worst_case_loss(
+            user_id, do["name"], extra_bet={"side": side, **calc}
+        )
+        return (other_risk + cur_loss) <= (max_capacity + 1e-6)
+
+    if _within_cap(base_upper):
+        return base_upper
+
+    lo, hi = 0.0, base_upper
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if _within_cap(mid):
+            lo = mid
+        else:
+            hi = mid
+    return max(0.0, lo)
 
 def _calc_cycle_limit_for_side(
     side: str,
@@ -180,32 +219,21 @@ def _calc_cycle_limit_for_side(
     base_capital: float,
     other_guaranteed_min: float,
 ) -> float:
-    """
-    - Mã đầu tiên (chưa có mã nào trên độ): tối đa bằng tiền gốc tài khoản (+ đầu lời chắc chắn độ khác nếu có).
-    - Từ mã thứ 2 trở đi:
-      Lấy tiền gốc tài khoản + đầu cửa đối diện (đã trừ 5% phế).
-      Nếu cửa đối diện đã có nhiều bước tích lũy, phần đầu đối diện được tính theo chuỗi:
-      mỗi lần chuyển sang cửa đối diện sẽ lấy phần đầu hiện có trừ 5% phế, cộng vào tiền gốc.
-    """
     root_cap = max(0.0, base_capital + other_guaranteed_min)
     if not existing_bets:
         return root_cap
 
     opp_side = "DO" if side == "XANH" else "XANH"
-    # Đầu cửa đối diện hiện tại (tổng lời ròng sau 5% của các mã cửa đối diện)
     opp_leg_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == opp_side)
-    # Phần đầu của chính cửa hiện tại (đã trừ 5% phế)
+    same_placed = sum(float(b["lose_amount"]) for b in existing_bets if b["side"] == side)
     same_leg_net = sum(float(b["win_net"]) for b in existing_bets if b["side"] == side)
 
-    # Nếu mã trước thuộc cửa đối diện: đầu đối diện sau trừ 5% phế
     if existing_bets[-1]["side"] == opp_side:
         opp_after_fee = opp_leg_net * (1.0 - FEE_RATE)
-        return max(0.0, root_cap + opp_after_fee)
+        return max(0.0, root_cap + opp_after_fee - same_placed)
 
-    # Nếu mã trước cũng thuộc cửa hiện tại: lấy đầu hiện tại trừ 5% phế cộng tiền gốc
     same_after_fee = same_leg_net * (1.0 - FEE_RATE)
-    return max(0.0, root_cap + max(opp_leg_net * (1.0 - FEE_RATE), same_after_fee))
-
+    return max(0.0, root_cap + max(opp_leg_net * (1.0 - FEE_RATE), same_after_fee) - same_placed)
 
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     u = db.get_user(user_id)
@@ -247,11 +275,17 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
     )
 
     if do:
-        max_xanh = _calc_cycle_limit_for_side(
+        raw_max_xanh = _calc_cycle_limit_for_side(
             "XANH", existing_bets, max_capacity, other_guaranteed_min
         )
-        max_do = _calc_cycle_limit_for_side(
+        raw_max_do = _calc_cycle_limit_for_side(
             "DO", existing_bets, max_capacity, other_guaranteed_min
+        )
+        max_xanh = _max_side_amount_within_capacity(
+            user_id, do, "XANH", open_dos, raw_max_xanh, max_capacity
+        )
+        max_do = _max_side_amount_within_capacity(
+            user_id, do, "DO", open_dos, raw_max_do, max_capacity
         )
     else:
         max_xanh = max(0.0, max_capacity + other_guaranteed_min)
