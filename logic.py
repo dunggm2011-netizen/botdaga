@@ -389,23 +389,34 @@ def _get_or_create_do_record(
     do_lose: float,
 ) -> dict | None:
     existing = db.get_do_by_name(do_name) if hasattr(db, "get_do_by_name") else None
-    if existing and existing["status"] == "CLOSED":
-        return None
-    if existing:
+    if existing and existing.get("status") != "CLOSED":
         db.update_do(
             int(existing["id"]),
             status="OPEN",
-            xanh_win=xanh_win, xanh_lose=xanh_lose,
-            do_win=do_win, do_lose=do_lose,
+            xanh_win=xanh_win,
+            xanh_lose=xanh_lose,
+            do_win=do_win,
+            do_lose=do_lose,
         )
         return db.get_do_by_id(int(existing["id"]))
-    return db.create_new_do(name=do_name, xanh_win=xanh_win, xanh_lose=xanh_lose, do_win=do_win, do_lose=do_lose)
+
+    new_id = db.create_do(
+        name=do_name,
+        xanh_win=xanh_win,
+        xanh_lose=xanh_lose,
+        do_win=do_win,
+        do_lose=do_lose,
+        status="OPEN",
+    )
+    return db.get_do_by_id(int(new_id))
 
 
 def open_specific_do_logic(
     raw_do: str | int,
-    xanh_win: float = 10.0, xanh_lose: float = 10.0,
-    do_win: float = 10.0, do_lose: float = 10.0,
+    xanh_win: float = 10.0,
+    xanh_lose: float = 10.0,
+    do_win: float = 10.0,
+    do_lose: float = 10.0,
     exclusive_active: bool = False,
 ) -> tuple[bool, str, dict | None]:
     ok_time, time_msg = can_open_do_by_time()
@@ -425,14 +436,13 @@ def open_specific_do_logic(
 
     do_rec = _get_or_create_do_record(do_name, xanh_win, xanh_lose, do_win, do_lose)
     if not do_rec:
-        return False, f"❌ Không thể mở <b>{do_name}</b>. Độ đã chốt không thể mở lại.", None
+        return False, f"❌ Không thể mở <b>{do_name}</b>.", None
 
     open_now = [str(d["name"]) for d in db.get_open_dos() if d.get("status") == "OPEN"]
     msg = (
         f"✅ <b>ĐÃ MỞ {do_name.upper()}</b> "
         f"(XANH <code>{xanh_win:g}/{xanh_lose:g}</code> | ĐỎ <code>{do_win:g}/{do_lose:g}</code>).\n"
-        f"• Có thể đánh song song: <b>{', '.join(open_now)}</b>.\n"
-        f"• Độ mới chỉ đánh trong phạm vi tiền gốc còn dư; muốn vượt mốc cần nạp thêm."
+        f"• Độ đang mở nhận kèo: <b>{', '.join(open_now)}</b>."
     )
     if held_names:
         msg += f"\n• Đã tạm hoãn: <b>{', '.join(held_names)}</b>."
