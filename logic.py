@@ -170,7 +170,6 @@ def max_worst_case_loss(user_id: int, do_name: str, extra_bet: dict | None = Non
 
 
 def _sum_bets(bets: list[dict]) -> dict:
-    """Tổng hợp các trường quan trọng của list bets."""
     return {
         "xanh_win_net": sum(float(b["win_net"]) for b in bets if b["side"] == "XANH"),
         "xanh_lose": sum(float(b["lose_amount"]) for b in bets if b["side"] == "XANH"),
@@ -181,7 +180,6 @@ def _sum_bets(bets: list[dict]) -> dict:
 
 
 def _min_edge_across(bets: list[dict]) -> float:
-    """MIN(lợi nhuận nếu XANH thắng, lợi nhuận nếu ĐỎ thắng) trên tập bets."""
     s = _sum_bets(bets)
     pnl_xanh = s["xanh_win_net"] - s["do_lose"]
     pnl_do = s["do_win_net"] - s["xanh_lose"]
@@ -192,16 +190,80 @@ def _min_edge_across(bets: list[dict]) -> float:
 # BETTING LIMIT — CÔNG THỨC CỐT LÕI
 # ============================================================
 
+def _max_side_amount_within_capacity(
+    user_id: int,
+    do: dict,
+    side: str,
+    open_dos: list[dict],
+    base_upper: float,
+    max_capacity: float,
+) -> float:
+    """
+    Siết mức đặt tối đa cho `side` trên `do`:
+    - Không vượt `base_upper`.
+    - Tổng rủi ro xấu nhất của toàn bộ các độ chưa chốt sau khi thêm mã <= `max_capacity`.
+    """
+    if base_upper <= 0.0 or max_capacity <= 0.0:
+        return 0.0
+
+    other_risk = sum(
+        max_worst_case_loss(user_id, d["name"])
+        for d in open_dos
+        if d["id"] != do["id"]
+    )
+    if other_risk > max_capacity + 1e-6:
+        return 0.0
+
+    win_u, lose_u = get_side_price(do, side)
+
+    def _within_cap(amt: float) -> bool:
+        calc = calc_bet_numbers(amt, win_u, lose_u)
+        cur_loss = max_worst_case_loss(
+            user_id, do["name"], extra_bet={"side": side, **calc}
+        )
+        return (other_risk + cur_loss) <= (max_capacity + 1e-6)
+
+    if _within_cap(base_upper):
+        return base_upper
+
+    lo, hi = 0.0, base_upper
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if _within_cap(mid):
+            lo = mid
+        else:
+            hi = mid
+    return max(0.0, lo)
+
+
+def _calc_cycle_limit_for_side(
+    side: str,
+    cur_bets: list[dict],
+    root_cap: float,
+) -> float:
+    """
+    - Mã đầu tiên (chưa có mã nào trên độ): tối đa theo tiền gốc tài khoản khả dụng (`root_cap`).
+    - Từ mã thứ 2 trở đi (dù đánh XANH hay ĐỎ):
+      Lấy tiền gốc tài khoản + tiền ăn được của mã đối diện (đã trừ 5% phế)
+      trừ đi phần tiền đã đặt của cửa hiện tại.
+    """
+    if root_cap <= 0.0:
+        return 0.0
+    if not cur_bets:
+        return root_cap
+
+    opp_side = "DO" if side == "XANH" else "XANH"
+    opp_win_net = sum(float(b["win_net"]) for b in cur_bets if b["side"] == opp_side)
+    same_win_net = sum(float(b["win_net"]) for b in cur_bets if b["side"] == side)
+    same_placed = sum(float(b["lose_amount"]) for b in cur_bets if b["side"] == side)
+
+    if cur_bets[-1]["side"] == opp_side:
+        return max(0.0, root_cap + opp_win_net - same_placed)
+
+    return max(0.0, root_cap + max(opp_win_net, same_win_net) - same_placed)
+
+
 def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
-    """
-    Hạn mức cược còn lại của khách:
-      max_capacity    = balance + (debt_limit - debt)   [trần thanh toán]
-      locked_capital  = max(0, -MIN(pnl_xanh, pnl_do)) trên TOÀN BỘ độ chưa chốt
-      base_unused     = max(0, max_capacity - locked_capital)
-      edge_bonus      = max(0, MIN(pnl_xanh, pnl_do))
-      Hạn mức cửa A   = base_unused + (phần lời chắc chắn từ cửa đối diện của các độ khác)
-                        nhưng KHÔNG vượt max_capacity - other_risk
-    """
     u = db.get_user(user_id)
     open_dos = db.get_unsettled_dos()
     if do_id is not None:
@@ -233,32 +295,24 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         other_bets = [b for b in all_bets if b["do_name"] != do["name"]]
 
         cur_sum = _sum_bets(cur_bets)
-        other_min_edge = _min_edge_across(other_bets)  # có thể âm
+        other_min_edge = _min_edge_across(other_bets)
         other_risk = max(0.0, -other_min_edge)
+        other_guaranteed_min = max(0.0, other_min_edge)
 
-        max_xanh = _solve_max_side_amount(
-            side="XANH",
-            cur_xanh_win_net=cur_sum["xanh_win_net"],
-            cur_xanh_lose=cur_sum["xanh_lose"],
-            cur_do_win_net=cur_sum["do_win_net"],
-            cur_do_lose=cur_sum["do_lose"],
-            other_risk=other_risk,
-            max_capacity=max_capacity,
-            base_unused=base_unused,
-            do=do,
+        # Vốn gốc khả dụng của tài khoản sau khi trừ rủi ro của các độ khác
+        root_for_do = max(0.0, max_capacity - other_risk) + other_guaranteed_min
+
+        raw_max_xanh = _calc_cycle_limit_for_side("XANH", cur_bets, root_for_do)
+        raw_max_do = _calc_cycle_limit_for_side("DO", cur_bets, root_for_do)
+
+        max_xanh = _max_side_amount_within_capacity(
+            user_id, do, "XANH", open_dos, raw_max_xanh, max_capacity
         )
-        max_do = _solve_max_side_amount(
-            side="DO",
-            cur_xanh_win_net=cur_sum["xanh_win_net"],
-            cur_xanh_lose=cur_sum["xanh_lose"],
-            cur_do_win_net=cur_sum["do_win_net"],
-            cur_do_lose=cur_sum["do_lose"],
-            other_risk=other_risk,
-            max_capacity=max_capacity,
-            base_unused=base_unused,
-            do=do,
+        max_do = _max_side_amount_within_capacity(
+            user_id, do, "DO", open_dos, raw_max_do, max_capacity
         )
     else:
+        cur_sum = _sum_bets([])
         max_xanh = base_unused + edge_bonus
         max_do = base_unused + edge_bonus
 
@@ -272,65 +326,16 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         "locked_capital": locked_capital,
         "base_unused": base_unused,
         "edge_bonus": edge_bonus,
-        "unused_capital": base_unused,       # giữ key cũ cho main.py
+        "unused_capital": base_unused,
         "xanh_opp_win": total_sum["do_win_net"],
         "do_opp_win": total_sum["xanh_win_net"],
         "max_xanh": max_xanh,
         "max_do": max_do,
-        "xanh_total_cap": (cur_sum["xanh_lose"] if do else 0.0) + max_xanh,
-        "do_total_cap": (cur_sum["do_lose"] if do else 0.0) + max_do,
-        "xanh_placed": cur_sum["xanh_lose"] if do else 0.0,
-        "do_placed": cur_sum["do_lose"] if do else 0.0,
+        "xanh_total_cap": cur_sum["xanh_lose"] + max_xanh,
+        "do_total_cap": cur_sum["do_lose"] + max_do,
+        "xanh_placed": cur_sum["xanh_lose"],
+        "do_placed": cur_sum["do_lose"],
     }
-
-
-def _solve_max_side_amount(
-    side: str,
-    cur_xanh_win_net: float,
-    cur_xanh_lose: float,
-    cur_do_win_net: float,
-    cur_do_lose: float,
-    other_risk: float,
-    max_capacity: float,
-    base_unused: float,
-    do: dict,
-) -> float:
-    """
-    Số tiền tối đa đặt thêm vào `side` của độ hiện tại sao cho:
-      other_risk + worst_case_loss_của_độ_này <= max_capacity
-    và không vượt base_unused.
-    """
-    if base_unused <= 0.0:
-        return 0.0
-
-    remain_risk = max(0.0, max_capacity - other_risk)
-    if remain_risk <= 0.0:
-        return 0.0
-
-    win_u, lose_u = get_side_price(do, side)
-    unit = calc_bet_numbers(1.0, win_u, lose_u)
-    u_win = float(unit["win_net"])
-    u_lose = float(unit["lose_amount"])
-
-    if side == "XANH":
-        # Nếu ĐỎ thắng: lỗ = (cur_xanh_lose + u_lose*x) - cur_do_win_net
-        cap_by_do = ((remain_risk - (cur_xanh_lose - cur_do_win_net)) / u_lose) if u_lose > 1e-12 else float("inf")
-        # Nếu XANH thắng: lỗ = (cur_do_lose) - (cur_xanh_win_net + u_win*x)
-        cur_loss_xanh = cur_do_lose - cur_xanh_win_net
-        if cur_loss_xanh > remain_risk and u_win > 1e-12:
-            cap_by_xanh = (cur_loss_xanh - remain_risk) / u_win
-        else:
-            cap_by_xanh = float("inf")
-        return max(0.0, min(base_unused, cap_by_do, cap_by_xanh))
-
-    # side == "DO"
-    cap_by_xanh = ((remain_risk - (cur_do_lose - cur_xanh_win_net)) / u_lose) if u_lose > 1e-12 else float("inf")
-    cur_loss_do = cur_xanh_lose - cur_do_win_net
-    if cur_loss_do > remain_risk and u_win > 1e-12:
-        cap_by_do = (cur_loss_do - remain_risk) / u_win
-    else:
-        cap_by_do = float("inf")
-    return max(0.0, min(base_unused, cap_by_xanh, cap_by_do))
 
 
 # ============================================================
@@ -573,10 +578,6 @@ def reject_withdrawal_logic(w_id: int) -> tuple[bool, str, dict | None]:
 # ============================================================
 
 def settle_single_do_no_reopen(do: dict, result: str) -> dict[int, float]:
-    """
-    Chốt 1 độ. Trả về per_user_net (âm = lỗ, dương = lời thực nhận).
-    CANCEL/DRAW: trả net = 0 cho mọi user có bet để report hiển thị.
-    """
     do_name = do["name"]
     bets = db.get_active_bets(do_name=do_name)
 
@@ -663,10 +664,6 @@ def settle_multiple_dos_logic(do_ids: list[int], result: str) -> dict:
 
 
 def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict[int, float]) -> str:
-    """
-    Ghi settled_dos và trả text báo cáo.
-    Lưu ý: bets đã bị đổi status trước đó, nên query theo status mới.
-    """
     now = datetime.now(VN_TZ)
     day_key = now.strftime("%Y-%m-%d")
 
@@ -718,11 +715,10 @@ def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict
 
 
 # ============================================================
-# REPORTS (placeholder nếu main.py cần)
+# REPORTS
 # ============================================================
 
 def build_live_report_text() -> str:
-    """Báo cáo độ đang chạy."""
     lines = ["<b>📋 ĐỘ ĐANG CHẠY</b>"]
     dos = db.get_unsettled_dos()
     if not dos:
@@ -744,7 +740,6 @@ def build_live_report_text() -> str:
 
 
 def build_pnl_report_text() -> str:
-    """Ăn thua từng độ trong ngày + tổng."""
     now = datetime.now(VN_TZ)
     day_key = now.strftime("%Y-%m-%d")
     settled = db.get_settled_dos_by_day(day_key)
@@ -759,7 +754,6 @@ def build_pnl_report_text() -> str:
 
 
 def build_daily_report_text() -> str:
-    """Báo cáo tổng hợp cuối ngày."""
     now = datetime.now(VN_TZ)
     users = db.get_all_users()
     total_bal = sum(float(u["balance"]) for u in users)
@@ -782,7 +776,6 @@ def build_daily_report_text() -> str:
 
 
 def close_day_accounting_logic() -> str:
-    """Chốt sổ cuối ngày — trả snapshot."""
     now = datetime.now(VN_TZ)
     snapshot = build_daily_report_text()
     db.clear_settled_dos_by_day(now.strftime("%Y-%m-%d"))
