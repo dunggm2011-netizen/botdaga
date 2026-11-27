@@ -5,8 +5,9 @@ DB_PATH = Path(__file__).parent / "ga_don.db"
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
 
@@ -18,6 +19,7 @@ def _ensure_column(conn: sqlite3.Connection, table: str, col_name: str, col_def:
 
 def init_db() -> None:
     with get_conn() as conn:
+        conn.execute("PRAGMA journal_mode = WAL;")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
