@@ -748,14 +748,14 @@ def on_callback(call: types.CallbackQuery):
             chat_id,
             "\U0001f3af <b>CHỌN HOẶC NHẬP SỐ ĐỘ MUỐN MỞ</b>\n"
             "\u2022 Hỗ trợ mở ngẫu nhiên theo thực tế dời lịch (ví dụ mở <b>Độ 3</b> trước, <b>Độ 2</b> sau, hoặc <b>Độ 5</b>).\n"
-            "\u2022 Mở độ nào hệ thống sẽ tự khóa/hoãn nhận kèo các độ khác để khách không đánh nhầm.",
+            "\u2022 Có thể mở và đánh <b>song song nhiều độ</b> cùng lúc.",
             reply_markup=kb_open_do_picker(),
         )
 
     elif data.startswith("a_open_num_"):
         num_str = data.split("_")[3]
         PENDING_STATE.pop(uid, None)
-        ok, msg, _ = open_specific_do_logic(num_str, exclusive_active=True)
+        ok, msg, _ = open_specific_do_logic(num_str, exclusive_active=False)
         bot.send_message(chat_id, msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid) if ok else None)
 
     elif data == "a_open_custom":
@@ -1075,7 +1075,7 @@ def on_text(message: types.Message):
 
     if act == "ADMIN_OPEN_SPECIFIC_DO" and is_admin(uid):
         PENDING_STATE.pop(uid, None)
-        ok, msg, _ = open_specific_do_logic(raw, exclusive_active=True)
+        ok, msg, _ = open_specific_do_logic(raw, exclusive_active=False)
         bot.send_message(chat_id, msg, reply_markup=get_panel_by_chat(chat_id, chat_type, uid) if ok else None)
         return
 
