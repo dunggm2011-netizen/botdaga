@@ -198,11 +198,6 @@ def _max_side_amount_within_capacity(
     base_upper: float,
     max_capacity: float,
 ) -> float:
-    """
-    Siết mức đặt tối đa cho `side` trên `do`:
-    - Không vượt `base_upper`.
-    - Tổng rủi ro xấu nhất của toàn bộ các độ chưa chốt sau khi thêm mã <= `max_capacity`.
-    """
     if base_upper <= 0.0 or max_capacity <= 0.0:
         return 0.0
 
@@ -241,12 +236,6 @@ def _calc_cycle_limit_for_side(
     cur_bets: list[dict],
     root_cap: float,
 ) -> float:
-    """
-    - Mã đầu tiên (chưa có mã nào trên độ): tối đa theo tiền gốc tài khoản khả dụng (`root_cap`).
-    - Từ mã thứ 2 trở đi (dù đánh XANH hay ĐỎ):
-      Lấy tiền gốc tài khoản + tiền ăn được của mã đối diện (đã trừ 5% phế)
-      trừ đi phần tiền đã đặt của cửa hiện tại.
-    """
     if root_cap <= 0.0:
         return 0.0
     if not cur_bets:
@@ -299,7 +288,6 @@ def get_user_betting_limit_info(user_id: int, do_id: int | None = None) -> dict:
         other_risk = max(0.0, -other_min_edge)
         other_guaranteed_min = max(0.0, other_min_edge)
 
-        # Vốn gốc khả dụng của tài khoản sau khi trừ rủi ro của các độ khác
         root_for_do = max(0.0, max_capacity - other_risk) + other_guaranteed_min
 
         raw_max_xanh = _calc_cycle_limit_for_side("XANH", cur_bets, root_for_do)
@@ -518,9 +506,20 @@ def place_bet_logic(user_id: int, amount: float, side: str, do_id: int | None = 
 def apply_deposit_logic(target_uid: int, amount: float) -> dict:
     if not isfinite(float(amount)) or amount <= 0:
         raise ValueError("Số tiền nạp phải hữu hạn và lớn hơn 0.")
+    now = datetime.now(VN_TZ)
     u = db.get_user(target_uid)
-    new_balance = float(u["balance"]) + amount
+    bal_before = float(u["balance"])
+    new_balance = bal_before + amount
     db.update_user_fields(target_uid, balance=new_balance)
+    db.log_wallet_transaction(
+        tx_type="DEPOSIT",
+        user_id=target_uid,
+        amount=amount,
+        balance_before=bal_before,
+        balance_after=new_balance,
+        day_key=now.strftime("%Y-%m-%d"),
+        created_at=now.strftime("%H:%M - %d/%m/%Y"),
+    )
     return {
         "user": db.get_user(target_uid),
         "new_balance": new_balance,
@@ -559,10 +558,23 @@ def confirm_withdrawal_logic(w_id: int) -> tuple[bool, str, dict | None]:
     if w["status"] != "PENDING":
         return False, f"Lệnh rút <code>#R{w_id:03d}</code> đã xử lý ({w['status']}).", None
 
+    now = datetime.now(VN_TZ)
     amt = float(w["amount"])
+    uid = int(w["user_id"])
     db.update_withdrawal(w_id, status="APPROVED")
     db.add_realized_profit(-amt)
-    u = db.get_user(int(w["user_id"]))
+    u = db.get_user(uid)
+    cur_bal = float(u["balance"])
+    db.log_wallet_transaction(
+        tx_type="WITHDRAW_APPROVED",
+        user_id=uid,
+        amount=amt,
+        balance_before=cur_bal,
+        balance_after=cur_bal,
+        ref_code=f"#R{w_id:03d}",
+        day_key=now.strftime("%Y-%m-%d"),
+        created_at=now.strftime("%H:%M - %d/%m/%Y"),
+    )
     return True, f"\u2705 Đã xác nhận chuyển tiền lệnh <code>#R{w_id:03d}</code> (<b>{fmt_num(amt)}</b>).", {"withdrawal": w, "user": u}
 
 
@@ -763,30 +775,115 @@ def build_pnl_report_text() -> str:
     return "\n".join(lines)
 
 
+def _calc_daily_settlement_metrics(day_key: str) -> dict:
+    settled_rows = db.get_settled_dos_by_day(day_key)
+    tx_rows = db.get_wallet_transactions_by_day(day_key)
+    users = db.get_all_users()
+
+    # Từng khách lời/lỗ trong ngày & tổng lời/lỗ lý thuyết của công ty
+    user_pnl_list = []
+    total_house_pnl_today = 0.0
+    for u in users:
+        u_pnl = float(u.get("pnl_net", 0.0))
+        if abs(u_pnl) > 1e-6:
+            user_pnl_list.append({
+                "user_id": int(u["user_id"]),
+                "name": u["name"],
+                "pnl": u_pnl,
+                "balance": float(u.get("balance", 0.0)),
+                "debt": float(u.get("debt", 0.0)),
+            })
+            # Khách lời (+) => Công ty lỗ (-); Khách thua (-) => Công ty lời (+)
+            total_house_pnl_today -= u_pnl
+
+    if not user_pnl_list and settled_rows:
+        total_house_pnl_today = sum(float(r.get("house_net", 0.0)) for r in settled_rows)
+
+    # Dòng tiền thực thu từ khách & thực chi chuyển trả khách trong ngày
+    total_cash_in = 0.0
+    total_cash_out = 0.0
+    for tx in tx_rows:
+        ttype = str(tx.get("tx_type", "")).upper()
+        amt = float(tx.get("amount", 0.0))
+        if ttype in ("DEPOSIT", "DEBT_PAID", "PAY_DEBT"):
+            total_cash_in += amt
+        elif ttype in ("WITHDRAW_APPROVED", "WITHDRAW_PAID", "WITHDRAW"):
+            total_cash_out += amt
+
+    carry_in_from_yesterday = float(db.get_setting("carry_over_pnl", "0.0") or 0.0)
+    total_customer_debt = sum(float(u.get("debt", 0.0)) for u in users)
+    total_customer_wallet = sum(float(u.get("balance", 0.0)) for u in users)
+
+    if total_house_pnl_today >= 0:
+        if total_cash_in > 0:
+            actual_shareholder_pnl = min(total_house_pnl_today, total_cash_in) - total_cash_out
+        else:
+            actual_shareholder_pnl = max(0.0, total_house_pnl_today - total_customer_debt) - total_cash_out
+    else:
+        actual_shareholder_pnl = total_cash_in - total_cash_out
+
+    carry_next_day = total_customer_debt - total_customer_wallet
+
+    return {
+        "day_key": day_key,
+        "user_pnl_list": sorted(user_pnl_list, key=lambda x: x["pnl"], reverse=True),
+        "total_house_pnl_today": total_house_pnl_today,
+        "carry_in_from_yesterday": carry_in_from_yesterday,
+        "total_cash_in": total_cash_in,
+        "total_cash_out": total_cash_out,
+        "actual_shareholder_pnl": actual_shareholder_pnl,
+        "total_customer_debt": total_customer_debt,
+        "total_customer_wallet": total_customer_wallet,
+        "carry_next_day": carry_next_day,
+    }
+
+
 def build_daily_report_text() -> str:
     now = datetime.now(VN_TZ)
-    users = db.get_all_users()
-    total_bal = sum(float(u["balance"]) for u in users)
-    total_debt = sum(float(u["debt"]) for u in users)
-    total_limit = sum(float(u["debt_limit"]) for u in users)
-    open_dos = db.get_unsettled_dos()
-    total_open_principal = 0.0
-    for d in open_dos:
-        total_open_principal += _sum_bets(db.get_active_bets(do_name=d["name"]))["principal"]
+    day_key = now.strftime("%Y-%m-%d")
+    m = _calc_daily_settlement_metrics(day_key)
 
-    return (
-        f"<b>📊 BÁO CÁO CUỐI NGÀY — {now.strftime('%d/%m/%Y %H:%M')}</b>\n"
-        f"• Tổng khách hàng: <b>{len(users)}</b>\n"
-        f"• Độ đang chạy: <b>{len(open_dos)}</b>\n"
-        f"• Tổng số dư khách: <b>{fmt_num(total_bal)}</b>\n"
-        f"• Tổng nợ: <b>{fmt_num(total_debt)}</b> / Hạn mức: {fmt_num(total_limit)}\n"
-        f"• Tổng tiền cược chưa chốt: <b>{fmt_num(total_open_principal)}</b>\n"
-        f"• Lợi nhuận thực tế (realized): <b>{fmt_num(db.get_realized_profit())}</b>"
+    lines = [f"📊 <b>BÁO CÁO ĂN THUA CUỐI NGÀY ({now.strftime('%d/%m/%Y')})</b>\n"]
+
+    lines.append("<b>1. Ăn thua từng khách:</b>")
+    if m["user_pnl_list"]:
+        for item in m["user_pnl_list"]:
+            lines.append(
+                f"• <b>{item['name']}</b> (<code>{item['user_id']}</code>): {fmt_signed(item['pnl'])}"
+            )
+    else:
+        lines.append("• <i>Chưa phát sinh ăn thua hôm nay.</i>")
+
+    lines.append("\n<b>2. Công ty & Cổ đông:</b>")
+    if abs(m["carry_in_from_yesterday"]) > 1e-6:
+        lines.append(f"• Cộng dồn kỳ trước chuyển sang: <b>{fmt_signed(m['carry_in_from_yesterday'])}</b>")
+    lines.append(f"• Tổng lời/lỗ công ty hôm nay: <b>{fmt_signed(m['total_house_pnl_today'])}</b>")
+    lines.append(
+        f"• Đã thu khách: <b>{fmt_num(m['total_cash_in'])}</b> | Đã chuyển trả khách: <b>{fmt_num(m['total_cash_out'])}</b>"
     )
+    lines.append(f"• <b>Lợi nhuận thực tế cổ đông hôm nay: {fmt_signed(m['actual_shareholder_pnl'])}</b>")
+
+    lines.append("\n<b>3. Cộng dồn sang ngày hôm sau:</b>")
+    lines.append(f"• Khách thua/nợ chưa thanh toán (cộng dồn thu): <b>+{fmt_num(m['total_customer_debt'])}</b>")
+    lines.append(f"• Tiền khách lời chưa rút (nằm trong TK khách): <b>-{fmt_num(m['total_customer_wallet'])}</b>")
+    lines.append(f"• <b>Số dư cộng dồn sang hôm sau: {fmt_signed(m['carry_next_day'])}</b>")
+
+    return "\n".join(lines)
 
 
 def close_day_accounting_logic() -> str:
     now = datetime.now(VN_TZ)
-    snapshot = build_daily_report_text()
-    db.clear_settled_dos_by_day(now.strftime("%Y-%m-%d"))
-    return f"{snapshot}\n\n<i>Đã xóa settled_dos của ngày {now.strftime('%d/%m/%Y')}.</i>"
+    day_key = now.strftime("%Y-%m-%d")
+    m = _calc_daily_settlement_metrics(day_key)
+    report_snapshot = build_daily_report_text()
+
+    # Lưu phần chênh lệch cộng dồn sang ngày hôm sau
+    db.set_setting("carry_over_pnl", str(m["carry_next_day"]))
+
+    # Reset pnl_net trong ngày về 0, giữ nguyên balance và debt để cộng dồn qua ngày mới
+    for u in db.get_all_users():
+        if abs(float(u.get("pnl_net", 0.0))) > 1e-6:
+            db.update_user_fields(int(u["user_id"]), pnl_net=0.0)
+
+    db.clear_settled_dos_by_day(day_key)
+    return report_snapshot
