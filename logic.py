@@ -442,7 +442,7 @@ def open_specific_do_logic(
     msg = (
         f"✅ <b>ĐÃ MỞ {do_name.upper()}</b> "
         f"(XANH <code>{xanh_win:g}/{xanh_lose:g}</code> | ĐỎ <code>{do_win:g}/{do_lose:g}</code>).\n"
-        f"• Độ đang mở nhận kèo: <b>{', '.join(open_now)}</b>."
+        f"• Các độ đang mở song song: <b>{', '.join(open_now)}</b>."
     )
     if held_names:
         msg += f"\n• Đã tạm hoãn: <b>{', '.join(held_names)}</b>."
