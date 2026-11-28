@@ -731,8 +731,17 @@ def record_and_format_per_do_report(do_name: str, result: str, do_user_net: dict
     else:
         lines.append("  <i>Không có khách nào đặt cược.</i>")
 
+    house_net_do = -sum(do_user_net.values()) + total_fee
     summary_text = "\n".join(lines)
-    db.insert_settled_do(do_name, result, summary_text, day_key, now.strftime("%H:%M - %d/%m/%Y"))
+    db.insert_settled_do(
+        do_name,
+        result,
+        summary_text,
+        day_key,
+        now.strftime("%H:%M - %d/%m/%Y"),
+        total_fee_5pct=total_fee,
+        house_net=house_net_do,
+    )
     return summary_text
 
 
@@ -780,9 +789,9 @@ def _calc_daily_settlement_metrics(day_key: str) -> dict:
     tx_rows = db.get_wallet_transactions_by_day(day_key)
     users = db.get_all_users()
 
-    # Từng khách lời/lỗ trong ngày & tổng lời/lỗ lý thuyết của công ty
+    # Từng khách lời/lỗ trong ngày & tổng lời/lỗ kèo của công ty
     user_pnl_list = []
-    total_house_pnl_today = 0.0
+    total_bet_house_pnl = 0.0
     for u in users:
         u_pnl = float(u.get("pnl_net", 0.0))
         if abs(u_pnl) > 1e-6:
@@ -794,10 +803,15 @@ def _calc_daily_settlement_metrics(day_key: str) -> dict:
                 "debt": float(u.get("debt", 0.0)),
             })
             # Khách lời (+) => Công ty lỗ (-); Khách thua (-) => Công ty lời (+)
-            total_house_pnl_today -= u_pnl
+            total_bet_house_pnl -= u_pnl
 
-    if not user_pnl_list and settled_rows:
-        total_house_pnl_today = sum(float(r.get("house_net", 0.0)) for r in settled_rows)
+    # Tổng tiền phế 5% thu được trong ngày từ các độ đã chốt
+    total_fee_today = sum(float(r.get("total_fee_5pct", 0.0)) for r in settled_rows)
+    if total_fee_today == 0.0 and not user_pnl_list and settled_rows:
+        total_bet_house_pnl = sum(float(r.get("house_net", 0.0)) for r in settled_rows)
+
+    # Tổng lời/lỗ của công ty/casino hôm nay = ăn thua kèo + tiền phế 5%
+    total_house_pnl_today = total_bet_house_pnl + total_fee_today
 
     # Dòng tiền thực thu từ khách & thực chi chuyển trả khách trong ngày
     total_cash_in = 0.0
@@ -827,6 +841,8 @@ def _calc_daily_settlement_metrics(day_key: str) -> dict:
     return {
         "day_key": day_key,
         "user_pnl_list": sorted(user_pnl_list, key=lambda x: x["pnl"], reverse=True),
+        "total_bet_house_pnl": total_bet_house_pnl,
+        "total_fee_today": total_fee_today,
         "total_house_pnl_today": total_house_pnl_today,
         "carry_in_from_yesterday": carry_in_from_yesterday,
         "total_cash_in": total_cash_in,
@@ -857,7 +873,8 @@ def build_daily_report_text() -> str:
     lines.append("\n<b>2. Công ty & Cổ đông:</b>")
     if abs(m["carry_in_from_yesterday"]) > 1e-6:
         lines.append(f"• Cộng dồn kỳ trước chuyển sang: <b>{fmt_signed(m['carry_in_from_yesterday'])}</b>")
-    lines.append(f"• Tổng lời/lỗ công ty hôm nay: <b>{fmt_signed(m['total_house_pnl_today'])}</b>")
+    lines.append(f"• Tiền phế 5% trong ngày: <b>+{fmt_num(m['total_fee_today'])}</b>")
+    lines.append(f"• Tổng lời/lỗ công ty hôm nay (đã gồm phế): <b>{fmt_signed(m['total_house_pnl_today'])}</b>")
     lines.append(
         f"• Đã thu khách: <b>{fmt_num(m['total_cash_in'])}</b> | Đã chuyển trả khách: <b>{fmt_num(m['total_cash_out'])}</b>"
     )
